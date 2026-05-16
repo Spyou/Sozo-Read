@@ -1,0 +1,40 @@
+import 'package:equatable/equatable.dart';
+
+import '../../../core/models/book_detail.dart';
+import '../../../core/repository/library_repository.dart';
+
+enum DetailStatus { initial, loading, success, error }
+
+class DetailState extends Equatable {
+  final DetailStatus status;
+  final BookDetail? book;
+  final String? error;
+  final LibraryEntry? library;
+
+  const DetailState({
+    this.status = DetailStatus.initial,
+    this.book,
+    this.error,
+    this.library,
+  });
+
+  bool get inLibrary => library != null;
+
+  DetailState copyWith({
+    DetailStatus? status,
+    BookDetail? book,
+    String? error,
+    LibraryEntry? library,
+    bool clearLibrary = false,
+    bool clearError = false,
+  }) =>
+      DetailState(
+        status: status ?? this.status,
+        book: book ?? this.book,
+        error: clearError ? null : (error ?? this.error),
+        library: clearLibrary ? null : (library ?? this.library),
+      );
+
+  @override
+  List<Object?> get props => [status, book, error, library];
+}

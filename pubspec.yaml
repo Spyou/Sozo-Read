@@ -1,0 +1,61 @@
+name: sozo_manga
+description: "AizenRead - manga & novel reader powered by JS providers."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # State management
+  flutter_bloc: ^9.1.0
+  equatable: ^2.0.7
+
+  # DI
+  get_it: ^8.0.3
+
+  # Navigation
+  go_router: ^14.8.1
+
+  # Network
+  dio: ^5.8.0+1
+
+  # Local storage
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  path_provider: ^2.1.5
+
+  # JS engine
+  flutter_js: ^0.8.0
+
+  # Images
+  cached_network_image: ^3.4.1
+  shimmer: ^3.0.0
+  flutter_svg: ^2.0.3
+  palette_generator: ^0.3.3+5
+
+  # Utility
+  dartz: ^0.10.1
+  json_annotation: ^4.11.0
+  flutter_dotenv: ^5.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  build_runner: ^2.4.13
+  json_serializable: ^6.9.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - .env
+    - providers/mangadex.js
+    - providers/mangakakalot.js
+    - providers/weebcentral.js
+    - providers/mangapill.js
+    - providers/mangakatana.js
