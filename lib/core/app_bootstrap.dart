@@ -8,6 +8,9 @@ import 'di/injection.dart';
 import 'provider/provider_downloader.dart';
 import 'provider/provider_registry.dart';
 import 'repository/library_repository.dart';
+import 'state/active_source_cubit.dart';
+import 'state/novel_prefs_cubit.dart';
+import 'state/theme_cubit.dart';
 
 class AppBootstrap {
   static Future<void> initialize() async {
@@ -20,7 +23,13 @@ class AppBootstrap {
     await ProviderDownloader.init();
     await ProviderRegistry.init();
     await LibraryRepository.init();
+    await ActiveSourceCubit.init();
     await configureDependencies();
+    // Force-eager init of theme + novel-prefs cubits so they read Hive
+    // synchronously (they require the `settings` box to be open, which it
+    // is by this point thanks to ActiveSourceCubit.init).
+    sl<ThemeCubit>();
+    sl<NovelPrefsCubit>();
     await sl<ProviderRegistry>().seedDefaults();
     // Note: we do NOT call loadAll() here — that would try to download
     // providers from the placeholder GitHub URL and waste time. In dev,

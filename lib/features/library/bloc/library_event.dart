@@ -1,6 +1,7 @@
 import 'package:equatable/equatable.dart';
 
 import '../../../core/repository/library_repository.dart';
+import 'library_state.dart';
 
 abstract class LibraryEvent extends Equatable {
   const LibraryEvent();
@@ -25,4 +26,18 @@ class LibraryRemoved extends LibraryEvent {
   final String bookId;
   @override
   List<Object?> get props => [sourceId, bookId];
+}
+
+class LibrarySearchChanged extends LibraryEvent {
+  const LibrarySearchChanged(this.query);
+  final String query;
+  @override
+  List<Object?> get props => [query];
+}
+
+class LibrarySortChanged extends LibraryEvent {
+  const LibrarySortChanged(this.sort);
+  final LibrarySort sort;
+  @override
+  List<Object?> get props => [sort];
 }

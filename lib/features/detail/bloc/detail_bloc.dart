@@ -16,6 +16,7 @@ class DetailBloc extends Bloc<DetailEvent, DetailState> {
     on<DetailLoaded>(_onLoaded);
     on<DetailReloaded>(_onReloaded);
     on<DetailLibraryToggled>(_onLibraryToggled);
+    on<DetailSimilarRequested>(_onSimilarRequested);
   }
 
   final ProviderRepository _provider;
@@ -45,6 +46,34 @@ class DetailBloc extends Bloc<DetailEvent, DetailState> {
           book: book,
           library: entry,
           clearLibrary: entry == null,
+        ));
+        // Kick off the similar-books fetch once the main detail is loaded.
+        // Skipped when the source returned no genres — there's nothing to
+        // query against.
+        if (book.genres.isNotEmpty) {
+          add(const DetailSimilarRequested());
+        }
+      },
+    );
+  }
+
+  Future<void> _onSimilarRequested(
+    DetailSimilarRequested event,
+    Emitter<DetailState> emit,
+  ) async {
+    final book = state.book;
+    if (book == null || book.genres.isEmpty) return;
+    final genre = book.genres.first;
+    emit(state.copyWith(similarStatus: SimilarStatus.loading));
+    final result = await _provider.search(book.sourceId, genre);
+    result.fold(
+      (f) => emit(state.copyWith(similarStatus: SimilarStatus.error)),
+      (items) {
+        // Filter out the current book by id and cap to 12.
+        final filtered = items.where((b) => b.id != book.id).take(12).toList();
+        emit(state.copyWith(
+          similarStatus: SimilarStatus.success,
+          similar: filtered,
         ));
       },
     );

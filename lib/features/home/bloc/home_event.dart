@@ -20,3 +20,9 @@ class HomeSourceChanged extends HomeEvent {
   @override
   List<Object?> get props => [sourceId];
 }
+
+/// Emitted whenever the LibraryRepository changes (chapter progress write,
+/// add, remove). Triggers a re-read of the "Continue Reading" slice.
+class HomeLibraryChanged extends HomeEvent {
+  const HomeLibraryChanged();
+}

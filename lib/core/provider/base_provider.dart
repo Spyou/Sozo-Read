@@ -18,7 +18,10 @@ abstract class BaseProvider {
 
   Future<ProviderInfo> getInfo();
 
-  Future<List<BookItem>> search(String query, int page);
+  /// `category` is an optional hint the provider may use to switch its
+  /// listing endpoint (e.g. 'popular', 'latest', 'trending'). Empty/missing
+  /// = default popular behavior.
+  Future<List<BookItem>> search(String query, int page, {String category = ''});
 
   Future<BookDetail> getDetail(String url);
 

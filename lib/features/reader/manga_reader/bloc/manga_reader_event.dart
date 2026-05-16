@@ -1,6 +1,7 @@
 import 'package:equatable/equatable.dart';
 
 import '../../../../core/models/book_detail.dart';
+import 'manga_reader_state.dart';
 
 abstract class MangaReaderEvent extends Equatable {
   const MangaReaderEvent();
@@ -32,4 +33,22 @@ class MangaReaderPageChanged extends MangaReaderEvent {
 
 class MangaReaderModeToggled extends MangaReaderEvent {
   const MangaReaderModeToggled();
+}
+
+class MangaReaderDirectionToggled extends MangaReaderEvent {
+  const MangaReaderDirectionToggled();
+}
+
+class MangaReaderModeSet extends MangaReaderEvent {
+  const MangaReaderModeSet(this.mode);
+  final ReaderMode mode;
+  @override
+  List<Object?> get props => [mode];
+}
+
+class MangaReaderBrightnessChanged extends MangaReaderEvent {
+  const MangaReaderBrightnessChanged(this.value);
+  final double value;
+  @override
+  List<Object?> get props => [value];
 }

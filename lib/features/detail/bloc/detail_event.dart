@@ -21,3 +21,9 @@ class DetailReloaded extends DetailEvent {
 class DetailLibraryToggled extends DetailEvent {
   const DetailLibraryToggled();
 }
+
+/// Fetches "More like this" suggestions for the loaded book. Internal event —
+/// emitted after the main detail load succeeds.
+class DetailSimilarRequested extends DetailEvent {
+  const DetailSimilarRequested();
+}

@@ -16,6 +16,9 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
     on<MangaReaderChapterChanged>(_onChapterChanged);
     on<MangaReaderPageChanged>(_onPageChanged);
     on<MangaReaderModeToggled>(_onModeToggled);
+    on<MangaReaderDirectionToggled>(_onDirectionToggled);
+    on<MangaReaderModeSet>(_onModeSet);
+    on<MangaReaderBrightnessChanged>(_onBrightness);
   }
 
   final ProviderRepository _provider;
@@ -26,18 +29,19 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
     await _fetchPages(emit);
   }
 
-  Future<void> _onChapterChanged(MangaReaderChapterChanged event, Emitter<MangaReaderState> emit) async {
+  Future<void> _onChapterChanged(
+      MangaReaderChapterChanged event, Emitter<MangaReaderState> emit) async {
     if (state.book == null) return;
     final i = event.chapterIndex.clamp(0, state.book!.chapters.length - 1);
-    emit(state.copyWith(chapterIndex: i, pageIndex: 0));
+    emit(state.copyWith(chapterIndex: i, pageIndex: 0, autoAdvancing: true));
     await _fetchPages(emit);
+    emit(state.copyWith(autoAdvancing: false));
   }
 
   void _onPageChanged(MangaReaderPageChanged event, Emitter<MangaReaderState> emit) {
     emit(state.copyWith(pageIndex: event.pageIndex));
     final book = state.book;
-    if (book == null) return;
-    if (state.pages.isEmpty) return;
+    if (book == null || state.pages.isEmpty) return;
     final progress = event.pageIndex / state.pages.length;
     _library.updateProgress(
       sourceId: book.sourceId,
@@ -51,6 +55,21 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
     emit(state.copyWith(
       mode: state.mode == ReaderMode.vertical ? ReaderMode.horizontal : ReaderMode.vertical,
     ));
+  }
+
+  void _onModeSet(MangaReaderModeSet event, Emitter<MangaReaderState> emit) {
+    emit(state.copyWith(mode: event.mode));
+  }
+
+  void _onDirectionToggled(MangaReaderDirectionToggled event, Emitter<MangaReaderState> emit) {
+    emit(state.copyWith(
+      direction:
+          state.direction == ReadingDirection.ltr ? ReadingDirection.rtl : ReadingDirection.ltr,
+    ));
+  }
+
+  void _onBrightness(MangaReaderBrightnessChanged event, Emitter<MangaReaderState> emit) {
+    emit(state.copyWith(brightness: event.value.clamp(0.0, 0.85)));
   }
 
   Future<void> _fetchPages(Emitter<MangaReaderState> emit) async {

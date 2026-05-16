@@ -32,8 +32,9 @@ class ProviderRepository {
     String sourceId,
     String query, {
     int page = 1,
+    String category = '',
   }) =>
-      _guard(() => _need(sourceId).search(query, page));
+      _guard(() => _need(sourceId).search(query, page, category: category));
 
   /// Searches every loaded provider and returns merged results.
   Future<Map<String, Either<Failure, List<BookItem>>>> searchAll(

@@ -37,12 +37,21 @@ function _statusOf(s) {
   return 'unknown';
 }
 
-function search(query, page) {
+function search(query, page, category) {
   page = page || 1;
+  category = category || '';
   var hasQuery = query && String(query).trim().length > 0;
-  var url = hasQuery
-    ? SITE + '/?search=' + encodeURIComponent(String(query).trim()) + '&search_by=book_name' + (page > 1 ? '&page=' + page : '')
-    : SITE + '/latest' + (page > 1 ? '/page/' + page : '');
+  var url;
+  if (hasQuery) {
+    url = SITE + '/?search=' + encodeURIComponent(String(query).trim()) + '&search_by=book_name' + (page > 1 ? '&page=' + page : '');
+  } else if (category === 'latest') {
+    url = SITE + '/latest' + (page > 1 ? '/page/' + page : '');
+  } else if (category === 'trending') {
+    url = SITE + '/popular' + (page > 1 ? '/page/' + page : '');
+  } else {
+    // Default popular.
+    url = SITE + '/popular' + (page > 1 ? '/page/' + page : '');
+  }
   console.log('mangakatana search url: ' + url);
   return fetch(url).then(function(r) {
     console.log('mangakatana search status: ' + r.status + ' bodyLen: ' + (r.body || '').length);

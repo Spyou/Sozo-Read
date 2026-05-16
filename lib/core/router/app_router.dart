@@ -1,45 +1,79 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:hive/hive.dart';
 
 import '../../features/detail/screens/detail_screen.dart';
+import '../../features/genre_browse/screens/genre_browse_screen.dart';
 import '../../features/home/screens/home_screen.dart';
 import '../../features/library/screens/library_screen.dart';
+import '../../features/onboarding/screens/onboarding_screen.dart';
 import '../../features/reader/manga_reader/screens/manga_reader_screen.dart';
 import '../../features/reader/novel_reader/screens/novel_reader_screen.dart';
 import '../../features/search/screens/search_screen.dart';
+import '../../features/settings/screens/settings_screen.dart';
 import '../../features/sources/screens/sources_screen.dart';
 import '../models/book_detail.dart';
 import '../models/book_item.dart';
 import '../theme/app_colors.dart';
 
 GoRouter buildRouter() {
+  // First-run gate: if the user hasn't completed onboarding yet, land on
+  // /onboarding instead of /home. The `settings` box is opened during
+  // AppBootstrap.initialize, so this read is always safe.
+  final onboarded = Hive.box('settings').get('onboarded') == true;
+  final initial = onboarded ? '/home' : '/onboarding';
   return GoRouter(
-    initialLocation: '/home',
+    initialLocation: initial,
     routes: [
-      ShellRoute(
-        builder: (context, state, child) => _ShellScaffold(child: child),
-        routes: [
-          GoRoute(
-            path: '/home',
-            name: 'home',
-            pageBuilder: (_, _) => const NoTransitionPage(child: HomeScreen()),
-          ),
-          GoRoute(
-            path: '/library',
-            name: 'library',
-            pageBuilder: (_, _) => const NoTransitionPage(child: LibraryScreen()),
-          ),
-          GoRoute(
-            path: '/sources',
-            name: 'sources',
-            pageBuilder: (_, _) => const NoTransitionPage(child: SourcesScreen()),
-          ),
+      // Bottom-nav shell. IndexedStack keeps each tab's widget mounted so the
+      // home BLoC doesn't refetch when the user toggles between tabs.
+      StatefulShellRoute.indexedStack(
+        builder: (context, state, navigationShell) =>
+            _ShellScaffold(navigationShell: navigationShell),
+        branches: [
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: '/home',
+              name: 'home',
+              pageBuilder: (_, _) => const NoTransitionPage(child: HomeScreen()),
+            ),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: '/library',
+              name: 'library',
+              pageBuilder: (_, _) => const NoTransitionPage(child: LibraryScreen()),
+            ),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: '/search',
+              name: 'search',
+              pageBuilder: (_, _) => const NoTransitionPage(child: SearchScreen()),
+            ),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: '/settings',
+              name: 'settings',
+              pageBuilder: (_, _) => const NoTransitionPage(child: SettingsScreen()),
+            ),
+          ]),
         ],
       ),
+
+      // Onboarding lives outside the shell so it has no bottom-nav.
       GoRoute(
-        path: '/search',
-        name: 'search',
-        builder: (_, _) => const SearchScreen(),
+        path: '/onboarding',
+        name: 'onboarding',
+        builder: (_, _) => const OnboardingScreen(),
+      ),
+
+      // Modal-style routes — pushed on top of the shell.
+      GoRoute(
+        path: '/sources',
+        name: 'sources',
+        builder: (_, _) => const SourcesScreen(),
       ),
       GoRoute(
         path: '/detail/:sourceId/:bookId',
@@ -52,11 +86,24 @@ GoRouter buildRouter() {
             placeholder = extra;
             url = extra.url;
           }
-          // url should always be passed in extra for now
           return DetailScreen(
             sourceId: state.pathParameters['sourceId']!,
             url: url ?? '',
             placeholder: placeholder,
+          );
+        },
+      ),
+      GoRoute(
+        path: '/genre/:sourceId/:genre',
+        name: 'genre-browse',
+        builder: (_, state) {
+          final raw = state.pathParameters['genre']!;
+          // The path segment is URL-encoded by go_router; decode for display
+          // and for use as the search query.
+          final decoded = Uri.decodeComponent(raw);
+          return GenreBrowseScreen(
+            sourceId: state.pathParameters['sourceId']!,
+            genre: decoded,
           );
         },
       ),
@@ -87,32 +134,32 @@ GoRouter buildRouter() {
 }
 
 class _ShellScaffold extends StatelessWidget {
-  const _ShellScaffold({required this.child});
-  final Widget child;
+  const _ShellScaffold({required this.navigationShell});
+  final StatefulNavigationShell navigationShell;
 
-  static const _tabs = <(String, IconData, String)>[
-    ('/home', Icons.home_rounded, 'Home'),
-    ('/library', Icons.bookmark_rounded, 'Library'),
-    ('/sources', Icons.extension_rounded, 'Sources'),
+  static const _tabs = <(IconData, String)>[
+    (Icons.home_rounded, 'Home'),
+    (Icons.bookmark_rounded, 'Library'),
+    (Icons.search_rounded, 'Search'),
+    (Icons.settings_rounded, 'Settings'),
   ];
-
-  int _indexFor(BuildContext context) {
-    final location = GoRouterState.of(context).uri.path;
-    return _tabs.indexWhere((t) => location.startsWith(t.$1)).clamp(0, _tabs.length - 1);
-  }
 
   @override
   Widget build(BuildContext context) {
-    final index = _indexFor(context);
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: child,
+      body: navigationShell,
       bottomNavigationBar: BottomNavigationBar(
-        currentIndex: index,
-        onTap: (i) => context.go(_tabs[i].$1),
-        items: _tabs
-            .map((t) => BottomNavigationBarItem(icon: Icon(t.$2), label: t.$3))
-            .toList(),
+        currentIndex: navigationShell.currentIndex,
+        onTap: (i) => navigationShell.goBranch(
+          i,
+          // Reset the branch's stack when re-tapping the active tab.
+          initialLocation: i == navigationShell.currentIndex,
+        ),
+        items: [
+          for (final t in _tabs)
+            BottomNavigationBarItem(icon: Icon(t.$1), label: t.$2),
+        ],
       ),
     );
   }

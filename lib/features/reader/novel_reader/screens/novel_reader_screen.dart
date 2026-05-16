@@ -6,6 +6,7 @@ import '../../../../core/di/injection.dart';
 import '../../../../core/models/book_detail.dart';
 import '../../../../core/repository/library_repository.dart';
 import '../../../../core/repository/provider_repository.dart';
+import '../../../../core/state/novel_prefs_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/state_views.dart';
 import '../bloc/novel_reader_bloc.dart';
@@ -24,7 +25,10 @@ class NovelReaderScreen extends StatelessWidget {
         providerRepo: sl<ProviderRepository>(),
         libraryRepo: sl<LibraryRepository>(),
       )..add(NovelReaderStarted(book: book, chapterIndex: chapterIndex)),
-      child: const _NovelView(),
+      child: BlocProvider.value(
+        value: sl<NovelPrefsCubit>(),
+        child: const _NovelView(),
+      ),
     );
   }
 }
@@ -46,10 +50,11 @@ class _NovelViewState extends State<_NovelView> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
+        backgroundColor: theme.scaffoldBackgroundColor,
         leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => context.pop()),
         title: BlocBuilder<NovelReaderBloc, NovelReaderState>(
           builder: (_, s) => Text(
@@ -61,13 +66,11 @@ class _NovelViewState extends State<_NovelView> {
         actions: [
           IconButton(
             icon: const Icon(Icons.text_decrease),
-            onPressed: () =>
-                context.read<NovelReaderBloc>().add(const NovelReaderFontSizeChanged(-1)),
+            onPressed: () => context.read<NovelPrefsCubit>().bumpFontSize(-1),
           ),
           IconButton(
             icon: const Icon(Icons.text_increase),
-            onPressed: () =>
-                context.read<NovelReaderBloc>().add(const NovelReaderFontSizeChanged(1)),
+            onPressed: () => context.read<NovelPrefsCubit>().bumpFontSize(1),
           ),
         ],
       ),
@@ -103,28 +106,40 @@ class _NovelViewState extends State<_NovelView> {
                     }
                     return false;
                   },
-                  child: SingleChildScrollView(
-                    controller: _scroll,
-                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (chapter != null)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 12),
-                            child: Text(chapter.title,
-                                style: Theme.of(context).textTheme.headlineSmall),
-                          ),
-                        SelectableText(
-                          state.text,
-                          style: TextStyle(
-                            fontSize: state.fontSize,
-                            height: 1.65,
-                            color: AppColors.textPrimary,
-                          ),
+                  child: BlocBuilder<NovelPrefsCubit, NovelPrefs>(
+                    builder: (context, prefs) {
+                      return SingleChildScrollView(
+                        controller: _scroll,
+                        padding: EdgeInsets.fromLTRB(
+                          prefs.horizontalMargin,
+                          8,
+                          prefs.horizontalMargin,
+                          32,
                         ),
-                      ],
-                    ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (chapter != null)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: Text(chapter.title,
+                                    style: theme.textTheme.headlineSmall),
+                              ),
+                            SelectableText(
+                              state.text,
+                              style: TextStyle(
+                                fontSize: prefs.fontSize,
+                                height: prefs.lineHeight,
+                                fontFamily: NovelPrefsCubit.resolveFamily(
+                                    prefs.fontFamily),
+                                color: theme.textTheme.bodyLarge?.color ??
+                                    AppColors.textPrimary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
                   ),
                 ),
               ),
@@ -143,14 +158,17 @@ class _NovelNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final book = state.book;
-    final canPrev = state.chapterIndex > 0;
-    final canNext = book != null && state.chapterIndex < book.chapters.length - 1;
+    // Chapter list is descending (index 0 = newest). Reading forward = newer
+    // = lower index; reading back = older = higher index.
+    final canPrev = book != null && state.chapterIndex < book.chapters.length - 1;
+    final canNext = state.chapterIndex > 0;
     return SafeArea(
       top: false,
       child: Container(
-        decoration: const BoxDecoration(
-          border: Border(top: BorderSide(color: AppColors.divider)),
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: theme.dividerColor)),
         ),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: Row(
@@ -159,7 +177,7 @@ class _NovelNavBar extends StatelessWidget {
               onPressed: canPrev
                   ? () => context
                       .read<NovelReaderBloc>()
-                      .add(NovelReaderChapterChanged(state.chapterIndex - 1))
+                      .add(NovelReaderChapterChanged(state.chapterIndex + 1))
                   : null,
               icon: const Icon(Icons.chevron_left),
               label: const Text('Prev'),
@@ -167,8 +185,8 @@ class _NovelNavBar extends StatelessWidget {
             Expanded(
               child: LinearProgressIndicator(
                 value: state.progress,
-                color: AppColors.primary,
-                backgroundColor: AppColors.card,
+                color: theme.colorScheme.primary,
+                backgroundColor: theme.cardTheme.color ?? AppColors.card,
                 minHeight: 4,
               ),
             ),
@@ -176,7 +194,7 @@ class _NovelNavBar extends StatelessWidget {
               onPressed: canNext
                   ? () => context
                       .read<NovelReaderBloc>()
-                      .add(NovelReaderChapterChanged(state.chapterIndex + 1))
+                      .add(NovelReaderChapterChanged(state.chapterIndex - 1))
                   : null,
               icon: const Icon(Icons.chevron_right),
               label: const Text('Next'),

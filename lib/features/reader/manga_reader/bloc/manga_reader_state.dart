@@ -4,7 +4,11 @@ import '../../../../core/models/book_detail.dart';
 import '../../../../core/models/page_content.dart';
 
 enum ReaderStatus { idle, loading, success, error }
+
 enum ReaderMode { vertical, horizontal }
+
+/// Right-to-left reading (Japanese manga). Applied to horizontal page mode.
+enum ReadingDirection { ltr, rtl }
 
 class MangaReaderState extends Equatable {
   final BookDetail? book;
@@ -14,6 +18,11 @@ class MangaReaderState extends Equatable {
   final String? error;
   final int pageIndex;
   final ReaderMode mode;
+  final ReadingDirection direction;
+  /// 0..1 — fraction of black overlay tinted over the pages.
+  final double brightness;
+  /// Loading-spinner shown while auto-advancing to the next chapter.
+  final bool autoAdvancing;
 
   const MangaReaderState({
     this.book,
@@ -23,6 +32,9 @@ class MangaReaderState extends Equatable {
     this.error,
     this.pageIndex = 0,
     this.mode = ReaderMode.vertical,
+    this.direction = ReadingDirection.ltr,
+    this.brightness = 0,
+    this.autoAdvancing = false,
   });
 
   MangaReaderState copyWith({
@@ -33,6 +45,9 @@ class MangaReaderState extends Equatable {
     String? error,
     int? pageIndex,
     ReaderMode? mode,
+    ReadingDirection? direction,
+    double? brightness,
+    bool? autoAdvancing,
     bool clearError = false,
   }) =>
       MangaReaderState(
@@ -43,8 +58,22 @@ class MangaReaderState extends Equatable {
         error: clearError ? null : (error ?? this.error),
         pageIndex: pageIndex ?? this.pageIndex,
         mode: mode ?? this.mode,
+        direction: direction ?? this.direction,
+        brightness: brightness ?? this.brightness,
+        autoAdvancing: autoAdvancing ?? this.autoAdvancing,
       );
 
   @override
-  List<Object?> get props => [book, chapterIndex, status, pages, error, pageIndex, mode];
+  List<Object?> get props => [
+        book,
+        chapterIndex,
+        status,
+        pages,
+        error,
+        pageIndex,
+        mode,
+        direction,
+        brightness,
+        autoAdvancing,
+      ];
 }

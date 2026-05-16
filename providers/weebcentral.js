@@ -51,13 +51,19 @@ function _idFromChapterUrl(url) {
   return m ? m[1] : url;
 }
 
-function search(query, page) {
+function search(query, page, category) {
   page = page || 1;
+  category = category || '';
   var hasQuery = query && String(query).trim().length > 0;
-  // The search endpoint returns the same HTML format whether or not text is set.
+  // Map category hints to weebcentral's sort options.
+  var sort = 'Popularity';
+  if (hasQuery) sort = 'Best+Match';
+  else if (category === 'latest') sort = 'Latest+Updates';
+  else if (category === 'trending') sort = 'Recently+Added';
+  else if (category === 'alphabetical') sort = 'Alphabet';
   var qs = [
     'text=' + encodeURIComponent(hasQuery ? String(query).trim() : ''),
-    'sort=' + (hasQuery ? 'Best+Match' : 'Popularity'),
+    'sort=' + sort,
     'order=Descending',
     'official=Any',
     'anime=Any',

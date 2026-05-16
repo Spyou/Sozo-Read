@@ -10,6 +10,8 @@ import '../../../core/widgets/state_views.dart';
 import '../bloc/library_bloc.dart';
 import '../bloc/library_event.dart';
 import '../bloc/library_state.dart';
+import '../widgets/library_search_bar.dart';
+import '../widgets/library_sort_sheet.dart';
 
 class LibraryScreen extends StatelessWidget {
   const LibraryScreen({super.key});
@@ -38,9 +40,35 @@ class _LibraryView extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      appBar: AppBar(title: const Text('Library')),
+      appBar: AppBar(
+        title: const Text('Library'),
+        actions: [
+          Builder(
+            builder: (ctx) => IconButton(
+              tooltip: 'Sort',
+              icon: const Icon(Icons.sort_rounded),
+              onPressed: () {
+                final bloc = ctx.read<LibraryBloc>();
+                LibrarySortSheet.show(
+                  ctx,
+                  current: bloc.state.sort,
+                  onSelected: (s) => bloc.add(LibrarySortChanged(s)),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
       body: Column(
         children: [
+          BlocBuilder<LibraryBloc, LibraryState>(
+            buildWhen: (a, b) => false,
+            builder: (context, state) => LibrarySearchBar(
+              initial: state.query,
+              onChanged: (v) =>
+                  context.read<LibraryBloc>().add(LibrarySearchChanged(v)),
+            ),
+          ),
           SizedBox(
             height: 48,
             child: BlocBuilder<LibraryBloc, LibraryState>(
@@ -68,9 +96,14 @@ class _LibraryView extends StatelessWidget {
               builder: (context, state) {
                 final items = state.filtered;
                 if (items.isEmpty) {
-                  return const EmptyView(
-                    message: 'Nothing here yet.\nAdd books from the detail screen.',
-                    icon: Icons.bookmark_outline,
+                  final hasQuery = state.query.trim().isNotEmpty;
+                  return EmptyView(
+                    message: hasQuery
+                        ? "No matches for '${state.query.trim()}'"
+                        : 'No saved books yet',
+                    icon: hasQuery
+                        ? Icons.search_off_rounded
+                        : Icons.bookmark_outline,
                   );
                 }
                 return GridView.builder(

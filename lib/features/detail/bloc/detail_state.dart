@@ -1,21 +1,28 @@
 import 'package:equatable/equatable.dart';
 
 import '../../../core/models/book_detail.dart';
+import '../../../core/models/book_item.dart';
 import '../../../core/repository/library_repository.dart';
 
 enum DetailStatus { initial, loading, success, error }
+
+enum SimilarStatus { idle, loading, success, error }
 
 class DetailState extends Equatable {
   final DetailStatus status;
   final BookDetail? book;
   final String? error;
   final LibraryEntry? library;
+  final SimilarStatus similarStatus;
+  final List<BookItem> similar;
 
   const DetailState({
     this.status = DetailStatus.initial,
     this.book,
     this.error,
     this.library,
+    this.similarStatus = SimilarStatus.idle,
+    this.similar = const [],
   });
 
   bool get inLibrary => library != null;
@@ -27,14 +34,18 @@ class DetailState extends Equatable {
     LibraryEntry? library,
     bool clearLibrary = false,
     bool clearError = false,
+    SimilarStatus? similarStatus,
+    List<BookItem>? similar,
   }) =>
       DetailState(
         status: status ?? this.status,
         book: book ?? this.book,
         error: clearError ? null : (error ?? this.error),
         library: clearLibrary ? null : (library ?? this.library),
+        similarStatus: similarStatus ?? this.similarStatus,
+        similar: similar ?? this.similar,
       );
 
   @override
-  List<Object?> get props => [status, book, error, library];
+  List<Object?> get props => [status, book, error, library, similarStatus, similar];
 }

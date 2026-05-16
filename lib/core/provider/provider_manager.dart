@@ -193,8 +193,8 @@ class JsProvider implements BaseProvider {
   }
 
   @override
-  Future<List<BookItem>> search(String query, int page) async {
-    final raw = await _call('search', [query, page]);
+  Future<List<BookItem>> search(String query, int page, {String category = ''}) async {
+    final raw = await _call('search', [query, page, category]);
     final list = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
     return list.map((m) => BookItem.fromJson({...m, 'sourceId': sourceId})).toList();
   }

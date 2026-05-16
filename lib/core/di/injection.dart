@@ -6,6 +6,9 @@ import '../provider/provider_manager.dart';
 import '../provider/provider_registry.dart';
 import '../repository/library_repository.dart';
 import '../repository/provider_repository.dart';
+import '../state/active_source_cubit.dart';
+import '../state/novel_prefs_cubit.dart';
+import '../state/theme_cubit.dart';
 
 final GetIt sl = GetIt.instance;
 
@@ -34,4 +37,9 @@ Future<void> configureDependencies() async {
     () => ProviderRepository(manager: sl(), registry: sl()),
   );
   sl.registerLazySingleton<LibraryRepository>(() => LibraryRepository());
+  sl.registerLazySingleton<ActiveSourceCubit>(
+    () => ActiveSourceCubit(repository: sl()),
+  );
+  sl.registerLazySingleton<ThemeCubit>(() => ThemeCubit());
+  sl.registerLazySingleton<NovelPrefsCubit>(() => NovelPrefsCubit());
 }

@@ -63,7 +63,7 @@ class ProviderRegistry {
 
   String get _registryBase {
     final v = dotenv.maybeGet('PROVIDER_REGISTRY_BASE');
-    return v ?? 'https://raw.githubusercontent.com/YOUR_USER/aizenread-providers/main/';
+    return v ?? 'https://raw.githubusercontent.com/YOUR_USER/sozoread-providers/main/';
   }
 
   /// Built-in (default) providers shipped with the app. The user can also add custom URLs.

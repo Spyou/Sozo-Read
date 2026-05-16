@@ -37,14 +37,22 @@ function _statusOf(s) {
   return 'unknown';
 }
 
-function search(query, page) {
+function search(query, page, category) {
   page = page || 1;
+  category = category || '';
   var hasQuery = query && String(query).trim().length > 0;
-  // Mangapill's /search needs a non-empty q, so for empty queries hit the
-  // homepage which lists popular series in the same card format.
-  var url = hasQuery
-    ? SITE + '/search?q=' + encodeURIComponent(String(query).trim()) + '&page=' + page
-    : SITE + '/';
+  // Mangapill's /search needs a non-empty q for keyword searches; otherwise
+  // hit category-specific browse pages.
+  var url;
+  if (hasQuery) {
+    url = SITE + '/search?q=' + encodeURIComponent(String(query).trim()) + '&page=' + page;
+  } else if (category === 'latest') {
+    url = SITE + '/chapters';
+  } else if (category === 'trending') {
+    url = SITE + '/'; // Home page features trending in its hero rows.
+  } else {
+    url = SITE + '/'; // Default popular.
+  }
   console.log('mangapill search url: ' + url);
   return fetch(url).then(function(r) {
     console.log('mangapill search status: ' + r.status + ' bodyLen: ' + (r.body || '').length);
