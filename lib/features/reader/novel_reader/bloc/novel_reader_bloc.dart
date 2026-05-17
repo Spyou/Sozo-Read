@@ -1,6 +1,7 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/di/injection.dart';
+import '../../../../core/repository/downloads_repository.dart';
 import '../../../../core/repository/library_repository.dart';
 import '../../../../core/repository/provider_repository.dart';
 import '../../../../core/repository/read_chapters_repository.dart';
@@ -89,6 +90,21 @@ class NovelReaderBloc extends Bloc<NovelReaderEvent, NovelReaderState> {
     if (book == null || book.chapters.isEmpty) return;
     emit(state.copyWith(status: NovelReaderStatus.loading, clearError: true, text: ''));
     final ch = book.chapters[state.chapterIndex];
+
+    // Offline-first: if the user downloaded this chapter, serve it from
+    // Hive instead of round-tripping to the source. The reader doesn't
+    // need to care whether the user is online or not.
+    final cached = sl<DownloadsRepository>()
+        .get(book.sourceId, book.id, ch.id);
+    if (cached != null && cached.text != null && cached.text!.isNotEmpty) {
+      emit(state.copyWith(
+        status: NovelReaderStatus.success,
+        text: cached.text!,
+        pendingResumeProgress: pendingResume,
+      ));
+      return;
+    }
+
     final result = await _provider.novelContent(book.sourceId, ch.url);
     result.fold(
       (f) => emit(state.copyWith(status: NovelReaderStatus.error, error: f.message)),

@@ -2,6 +2,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shimmer/shimmer.dart';
 
 import 'package:dio/dio.dart';
@@ -10,6 +11,7 @@ import '../../../core/di/injection.dart';
 import '../../../core/models/book_detail.dart';
 import '../../../core/models/book_item.dart';
 import '../../../core/models/chapter.dart';
+import '../../../core/models/provider_info.dart';
 import '../../../core/repository/downloads_repository.dart';
 import '../../../core/repository/library_repository.dart';
 import '../../../core/repository/provider_repository.dart';
@@ -83,6 +85,19 @@ class _DetailView extends StatelessWidget {
     }
   }
 
+  Future<void> _handleShare(BuildContext context, BookDetail book) async {
+    // Build a `sozoread://manga/<sourceId>/<bookId>?url=<encoded book.url>`
+    // deep link. The receiving side (parseSozoReadDeepLink in app_router.dart)
+    // decodes these segments back into route parameters.
+    final link =
+        'sozoread://manga/${Uri.encodeComponent(book.sourceId)}/${Uri.encodeComponent(book.id)}'
+        '?url=${Uri.encodeQueryComponent(book.url)}';
+    final shareText = '${book.title} on Sozo Read\n$link';
+    // share_plus 10.x exposes the static `Share.share(...)` helper. The
+    // `SharePlus.instance.share(ShareParams(...))` API only landed in 11.x.
+    await Share.share(shareText, subject: book.title);
+  }
+
   void _openReader(BuildContext context, BookDetail book, int chapterIndex) {
     final isManga = book.type.name != 'novel';
     context.pushNamed(
@@ -120,6 +135,7 @@ class _DetailView extends StatelessWidget {
             similar: state.similar,
             similarLoading: state.similarStatus == SimilarStatus.loading,
             onToggleLibrary: () => _handleToggleLibrary(context),
+            onShare: () => _handleShare(context, book),
             onOpenChapter: (i) => _openReader(context, book, i),
           );
         },
@@ -137,6 +153,7 @@ class _DetailBody extends StatefulWidget {
     required this.similar,
     required this.similarLoading,
     required this.onToggleLibrary,
+    required this.onShare,
     required this.onOpenChapter,
   });
 
@@ -147,6 +164,7 @@ class _DetailBody extends StatefulWidget {
   final List<BookItem> similar;
   final bool similarLoading;
   final VoidCallback onToggleLibrary;
+  final VoidCallback onShare;
   final void Function(int chapterIndex) onOpenChapter;
 
   @override
@@ -235,6 +253,14 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
             ),
           ),
           actions: [
+            IconButton(
+              tooltip: 'Share',
+              icon: const Icon(
+                Icons.share_rounded,
+                color: Colors.white,
+              ),
+              onPressed: widget.onShare,
+            ),
             IconButton(
               tooltip: inLibrary ? 'In library' : 'Save to library',
               icon: Icon(
@@ -965,6 +991,38 @@ class _ChapterDownloadButton extends StatelessWidget {
     final dio = sl<Dio>();
     final messenger = ScaffoldMessenger.of(context);
 
+    // Novels: fetch the chapter text directly and store inline. No image
+    // CDN gymnastics needed — a single Hive write captures the whole
+    // chapter (~50 KB even for very long ones).
+    if (book.type == ProviderType.novel) {
+      final res =
+          await providerRepo.novelContent(book.sourceId, chapter.url);
+      res.fold(
+        (f) => messenger.showSnackBar(
+          SnackBar(content: Text('Download failed: ${f.message}')),
+        ),
+        (content) async {
+          if (content.text.trim().isEmpty) {
+            messenger.showSnackBar(
+              const SnackBar(content: Text('Chapter is empty — nothing to save.')),
+            );
+            return;
+          }
+          await repo.enqueueNovel(
+            book: book,
+            chapter: chapter,
+            text: content.text,
+            nextChapterUrl: content.nextUrl,
+          );
+          messenger.showSnackBar(
+            SnackBar(content: Text('Saved ${chapter.title} for offline')),
+          );
+        },
+      );
+      return;
+    }
+
+    // Manga path — fetch image URLs then stream each one to disk.
     final pagesRes = await providerRepo.pages(book.sourceId, chapter.url);
     pagesRes.fold(
       (f) => messenger.showSnackBar(

@@ -22,11 +22,18 @@ void main() async {
   await AppBootstrap.initialize();
   // Dev convenience: also load JS providers bundled with the app, so the
   // first run works without a configured GitHub registry.
-  // Three working sources by default. All deliver full chapter pages.
+  // Manga: weebcentral, mangapill, mangakatana — full chapter pages.
+  // Novel: freewebnovel, novelbin — server-side HTML, no CF gate.
   // mangadex.js and mangakakalot.js are still shipped as assets but not
   // auto-loaded (mangakakalot caps at 6 SSR pages; mangadex's popular feed
   // is dominated by licensed manhwa with no images).
-  await loadBundledProviders(['weebcentral', 'mangapill', 'mangakatana']);
+  await loadBundledProviders([
+    'weebcentral',
+    'mangapill',
+    'mangakatana',
+    'freewebnovel',
+    'novelbin',
+  ]);
   runApp(const SozoReadApp());
 }
 

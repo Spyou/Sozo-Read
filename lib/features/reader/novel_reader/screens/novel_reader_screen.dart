@@ -217,14 +217,23 @@ class _NovelNavBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final book = state.book;
-    // Chapter list is descending (index 0 = newest). Reading forward = newer
-    // = lower index; reading back = older = higher index.
-    final canPrev = book != null && state.chapterIndex < book.chapters.length - 1;
-    final canNext = state.chapterIndex > 0;
+    // Auto-detect the chapter list ordering. Manga providers return
+    // chapters newest-first (descending); novel providers return them
+    // oldest-first (ascending). Walking the list in either direction
+    // needs the right delta or the prev/next buttons feel inverted.
+    final ascending = book != null &&
+        book.chapters.length >= 2 &&
+        ((book.chapters.last.number ?? 0) >
+            (book.chapters.first.number ?? 0));
+    final prevDelta = ascending ? -1 : 1;
+    final nextDelta = ascending ? 1 : -1;
+    final i = state.chapterIndex;
+    final n = book?.chapters.length ?? 0;
+    final canPrev = book != null && i + prevDelta >= 0 && i + prevDelta < n;
+    final canNext = book != null && i + nextDelta >= 0 && i + nextDelta < n;
     return SafeArea(
       top: false,
       child: Container(
-        color: bg,
         decoration: BoxDecoration(
           color: bg,
           border: Border(top: BorderSide(color: theme.dividerColor)),
@@ -237,7 +246,7 @@ class _NovelNavBar extends StatelessWidget {
               onPressed: canPrev
                   ? () => context
                       .read<NovelReaderBloc>()
-                      .add(NovelReaderChapterChanged(state.chapterIndex + 1))
+                      .add(NovelReaderChapterChanged(i + prevDelta))
                   : null,
               icon: const Icon(Icons.chevron_left),
               label: const Text('Prev'),
@@ -255,7 +264,7 @@ class _NovelNavBar extends StatelessWidget {
               onPressed: canNext
                   ? () => context
                       .read<NovelReaderBloc>()
-                      .add(NovelReaderChapterChanged(state.chapterIndex - 1))
+                      .add(NovelReaderChapterChanged(i + nextDelta))
                   : null,
               icon: const Icon(Icons.chevron_right),
               label: const Text('Next'),

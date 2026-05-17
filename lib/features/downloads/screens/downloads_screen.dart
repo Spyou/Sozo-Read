@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import '../../../core/di/injection.dart';
@@ -16,6 +17,41 @@ class DownloadsScreen extends StatefulWidget {
 class _DownloadsScreenState extends State<DownloadsScreen> {
   final DownloadsRepository _repo = sl<DownloadsRepository>();
   final Set<String> _collapsed = {};
+
+  /// Open a downloaded chapter directly in the reader. We rely on the
+  /// book snapshot stashed at download time so this works fully offline —
+  /// no provider round-trip. The snapshot may be missing for very old
+  /// downloads from before the feature shipped; in that case we fall back
+  /// to navigating to the detail screen so the user can tap from there.
+  void _openReader(BuildContext context, DownloadEntry entry) {
+    final book = _repo.getBookSnapshot(entry.sourceId, entry.bookId);
+    if (book == null) {
+      // Legacy entry without snapshot — bounce to detail.
+      context.pushNamed(
+        'detail',
+        pathParameters: {'sourceId': entry.sourceId, 'bookId': entry.bookId},
+        queryParameters: {'url': entry.chapterUrl},
+      );
+      return;
+    }
+    final chapterIndex =
+        book.chapters.indexWhere((c) => c.id == entry.chapterId);
+    if (chapterIndex < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Chapter no longer in the book.')),
+      );
+      return;
+    }
+    final routeName = entry.isNovel ? 'novel-reader' : 'manga-reader';
+    context.pushNamed(
+      routeName,
+      pathParameters: {'sourceId': book.sourceId, 'bookId': book.id},
+      extra: <String, dynamic>{
+        'book': book,
+        'chapterIndex': chapterIndex,
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -79,6 +115,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                   if (!collapsed)
                     ...groupEntries.map((e) => _ChapterRow(
                           entry: e,
+                          onTap: () => _openReader(context, e),
                           onDelete: () async {
                             await _repo.delete(e.sourceId, e.bookId, e.chapterId);
                             if (!context.mounted) return;
@@ -97,22 +134,33 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
 }
 
 class _ChapterRow extends StatelessWidget {
-  const _ChapterRow({required this.entry, required this.onDelete});
+  const _ChapterRow({
+    required this.entry,
+    required this.onTap,
+    required this.onDelete,
+  });
 
   final DownloadEntry entry;
+  final VoidCallback onTap;
   final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.primary;
+    final readyToOpen = entry.status == DownloadStatus.done;
     final statusLabel = switch (entry.status) {
       DownloadStatus.queued => 'Queued',
       DownloadStatus.downloading =>
         'Downloading ${entry.completed}/${entry.total}',
-      DownloadStatus.done => '${entry.total} pages',
+      DownloadStatus.done =>
+        entry.isNovel ? 'Saved' : '${entry.total} pages',
       DownloadStatus.failed => 'Failed',
     };
     return ListTile(
+      // Disable the tap when nothing is openable yet (queued / failed)
+      // so the user gets no-op confusion. Done downloads + downloading
+      // ones (so they can preview the partial) are tappable.
+      onTap: readyToOpen ? onTap : null,
       dense: true,
       contentPadding: const EdgeInsets.only(left: 48, right: 8),
       title: Text(

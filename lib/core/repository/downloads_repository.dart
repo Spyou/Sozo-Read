@@ -50,6 +50,11 @@ class DownloadEntry {
   final DateTime createdAt;
   final DateTime updatedAt;
   final String? error;
+  // Novel-only: the chapter's plain text + the URL the next chapter
+  // resolves to. For manga downloads both are null and `pages` is used
+  // instead.
+  final String? text;
+  final String? nextChapterUrl;
 
   const DownloadEntry({
     required this.sourceId,
@@ -66,7 +71,11 @@ class DownloadEntry {
     required this.createdAt,
     required this.updatedAt,
     this.error,
+    this.text,
+    this.nextChapterUrl,
   });
+
+  bool get isNovel => text != null;
 
   String get key => '$sourceId::$bookId::$chapterId';
 
@@ -78,6 +87,8 @@ class DownloadEntry {
     DateTime? updatedAt,
     String? error,
     bool clearError = false,
+    String? text,
+    String? nextChapterUrl,
   }) =>
       DownloadEntry(
         sourceId: sourceId,
@@ -94,6 +105,8 @@ class DownloadEntry {
         createdAt: createdAt,
         updatedAt: updatedAt ?? DateTime.now(),
         error: clearError ? null : (error ?? this.error),
+        text: text ?? this.text,
+        nextChapterUrl: nextChapterUrl ?? this.nextChapterUrl,
       );
 
   Map<String, dynamic> toJson() => {
@@ -111,6 +124,8 @@ class DownloadEntry {
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
         'error': error,
+        'text': text,
+        'nextChapterUrl': nextChapterUrl,
       };
 
   factory DownloadEntry.fromJson(Map<String, dynamic> j) => DownloadEntry(
@@ -133,14 +148,21 @@ class DownloadEntry {
         createdAt: DateTime.parse(j['createdAt'] as String),
         updatedAt: DateTime.parse(j['updatedAt'] as String),
         error: j['error'] as String?,
+        text: j['text'] as String?,
+        nextChapterUrl: j['nextChapterUrl'] as String?,
       );
 }
 
 /// Hive + filesystem backed downloads store.
 class DownloadsRepository {
   static const String boxName = 'downloads';
+  /// Side box keyed by `sourceId::bookId`, value = serialized BookDetail.
+  /// Lets the Downloads screen open a chapter directly in the reader
+  /// without re-fetching the book over the network (offline-first).
+  static const String bookSnapshotBoxName = 'download_books';
 
   Box<Map> get _box => Hive.box<Map>(boxName);
+  Box<Map> get _bookBox => Hive.box<Map>(bookSnapshotBoxName);
 
   Directory? _rootDir;
   final Map<String, CancelToken> _inFlight = {};
@@ -149,6 +171,25 @@ class DownloadsRepository {
   static Future<void> init() async {
     if (!Hive.isBoxOpen(boxName)) {
       await Hive.openBox<Map>(boxName);
+    }
+    if (!Hive.isBoxOpen(bookSnapshotBoxName)) {
+      await Hive.openBox<Map>(bookSnapshotBoxName);
+    }
+  }
+
+  String _bookKey(String sourceId, String bookId) => '$sourceId::$bookId';
+
+  Future<void> saveBookSnapshot(BookDetail book) async {
+    await _bookBox.put(_bookKey(book.sourceId, book.id), book.toJson());
+  }
+
+  BookDetail? getBookSnapshot(String sourceId, String bookId) {
+    final raw = _bookBox.get(_bookKey(sourceId, bookId));
+    if (raw == null) return null;
+    try {
+      return BookDetail.fromJson(Map<String, dynamic>.from(raw));
+    } catch (_) {
+      return null;
     }
   }
 
@@ -238,6 +279,11 @@ class DownloadsRepository {
     List<PageContent> pages,
     Dio dio,
   ) async {
+    // Cache the book metadata + chapter list so the Downloads screen can
+    // open the reader offline without re-fetching the detail page.
+    // ignore: discarded_futures
+    saveBookSnapshot(book);
+
     final key = _keyFor(book.sourceId, book.id, chapter.id);
     final now = DateTime.now();
 
@@ -326,6 +372,38 @@ class DownloadsRepository {
     } finally {
       _inFlight.remove(key);
     }
+  }
+
+  /// Novel-only download: stores the chapter's plain text inline in Hive
+  /// (typically <50 KB per chapter). No filesystem dir needed — the novel
+  /// reader pulls the text straight out of the DownloadEntry.
+  Future<void> enqueueNovel({
+    required BookDetail book,
+    required Chapter chapter,
+    required String text,
+    String? nextChapterUrl,
+  }) async {
+    // ignore: discarded_futures
+    saveBookSnapshot(book);
+    final now = DateTime.now();
+    final entry = DownloadEntry(
+      sourceId: book.sourceId,
+      bookId: book.id,
+      bookTitle: book.title,
+      chapterId: chapter.id,
+      chapterTitle: chapter.title,
+      chapterUrl: chapter.url,
+      chapterDate: chapter.date,
+      status: DownloadStatus.done,
+      total: 1,
+      completed: 1,
+      pages: const [],
+      createdAt: now,
+      updatedAt: now,
+      text: text,
+      nextChapterUrl: nextChapterUrl,
+    );
+    await _save(entry);
   }
 
   Future<void> cancel(String sourceId, String bookId, String chapterId) async {

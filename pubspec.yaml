@@ -66,6 +66,9 @@ dependencies:
   # foregrounds the app, which is when they actually care about updates.
   flutter_local_notifications: ^17.2.3
 
+  # System share sheet for sozoread:// deep links from the detail screen.
+  share_plus: ^10.1.4
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -85,6 +88,8 @@ flutter:
     - providers/weebcentral.js
     - providers/mangapill.js
     - providers/mangakatana.js
+    - providers/freewebnovel.js
+    - providers/novelbin.js
     - assets/icons/sozo_red.png
     - assets/icons/sozo_blue.png
     - assets/icons/sozo_green.png

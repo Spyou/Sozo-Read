@@ -35,13 +35,21 @@ class HomeBloc extends Bloc<HomeEvent, HomeState> {
   }
 
   /// Static helper used as the initial state seed for Continue Reading so
-  /// the row paints on first frame if the user already has history.
-  static List<LibraryEntry> _seed(LibraryRepository lib) {
-    final all = lib.getAll();
-    final filtered = all.where((e) {
-      final p = e.lastChapterProgress;
-      return p != null && p > 0 && p < 1;
-    }).toList()
+  /// the row paints on first frame if the user already has saved books.
+  ///
+  /// Filter rule: any entry with status `reading` (the default), sorted by
+  /// most-recently-updated first. We deliberately do NOT gate on
+  /// `lastChapterProgress` — that field is null for never-opened books and
+  /// exactly 1.0 right after finishing a chapter, both of which we still
+  /// want surfaced as "pick this up next". Completed/on-hold/planning
+  /// books are excluded — those live in their own Library tabs.
+  static List<LibraryEntry> _seed(LibraryRepository lib) =>
+      _filterContinueReading(lib.getAll());
+
+  static List<LibraryEntry> _filterContinueReading(List<LibraryEntry> all) {
+    final filtered = all
+        .where((e) => e.status == LibraryStatus.reading)
+        .toList()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     if (filtered.length > 12) return filtered.sublist(0, 12);
     return filtered;
@@ -51,16 +59,8 @@ class HomeBloc extends Bloc<HomeEvent, HomeState> {
   final LibraryRepository _library;
   StreamSubscription<BoxEvent>? _librarySub;
 
-  List<LibraryEntry> _readContinueReading() {
-    final all = _library.getAll();
-    final filtered = all.where((e) {
-      final p = e.lastChapterProgress;
-      return p != null && p > 0 && p < 1;
-    }).toList()
-      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    if (filtered.length > 12) return filtered.sublist(0, 12);
-    return filtered;
-  }
+  List<LibraryEntry> _readContinueReading() =>
+      _filterContinueReading(_library.getAll());
 
   void _onLibraryChanged(HomeLibraryChanged event, Emitter<HomeState> emit) {
     emit(state.copyWith(continueReading: _readContinueReading()));

@@ -48,3 +48,12 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android signing — keystore + passwords must NEVER be committed.
+# Losing the upload key locks us out of Play Store updates forever, so
+# back them up out-of-band (1Password, iCloud, etc) rather than git.
+android/app/upload-keystore.jks
+android/app/*.jks
+android/app/*.keystore
+android/key.properties
+android/KEYSTORE_INFO.md
