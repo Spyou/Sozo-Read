@@ -12,6 +12,8 @@ class NovelReaderState extends Equatable {
   final String? error;
   final double fontSize;
   final double progress;
+  /// One-shot resume hint (0..1) for the screen to apply after pages load.
+  final double? pendingResumeProgress;
 
   const NovelReaderState({
     this.book,
@@ -21,6 +23,7 @@ class NovelReaderState extends Equatable {
     this.error,
     this.fontSize = 16.0,
     this.progress = 0,
+    this.pendingResumeProgress,
   });
 
   NovelReaderState copyWith({
@@ -31,7 +34,9 @@ class NovelReaderState extends Equatable {
     String? error,
     double? fontSize,
     double? progress,
+    double? pendingResumeProgress,
     bool clearError = false,
+    bool clearResume = false,
   }) =>
       NovelReaderState(
         book: book ?? this.book,
@@ -41,8 +46,12 @@ class NovelReaderState extends Equatable {
         error: clearError ? null : (error ?? this.error),
         fontSize: fontSize ?? this.fontSize,
         progress: progress ?? this.progress,
+        pendingResumeProgress: clearResume
+            ? null
+            : (pendingResumeProgress ?? this.pendingResumeProgress),
       );
 
   @override
-  List<Object?> get props => [book, chapterIndex, status, text, error, fontSize, progress];
+  List<Object?> get props =>
+      [book, chapterIndex, status, text, error, fontSize, progress, pendingResumeProgress];
 }

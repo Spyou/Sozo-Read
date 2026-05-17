@@ -13,6 +13,11 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // flutter_local_notifications uses Java 8+ APIs (LocalDateTime,
+        // java.time, etc.) that don't exist on older Android. Core library
+        // desugaring back-fills them at compile time so the plugin can
+        // target minSdk 21 without runtime crashes.
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
@@ -28,6 +33,7 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        multiDexEnabled = true
     }
 
     buildTypes {
@@ -37,6 +43,11 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+}
+
+dependencies {
+    // Required companion to `isCoreLibraryDesugaringEnabled = true` above.
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
 
 flutter {

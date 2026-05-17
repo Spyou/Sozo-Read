@@ -33,6 +33,11 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# Build artifacts in Android subprojects (Gradle/AGP put output here).
+android/build/
+android/app/build/
+android/.gradle/
+
 # Symbolication related
 app.*.symbols
 

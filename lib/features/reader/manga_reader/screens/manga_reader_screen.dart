@@ -1,16 +1,21 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../../core/di/injection.dart';
 import '../../../../core/models/book_detail.dart';
 import '../../../../core/repository/library_repository.dart';
 import '../../../../core/repository/provider_repository.dart';
+import '../../../../core/state/manga_prefs_cubit.dart';
+import '../../../../core/state/novel_prefs_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/state_views.dart';
+import '../../widgets/reading_bg_picker_sheet.dart';
 import '../bloc/manga_reader_bloc.dart';
 import '../bloc/manga_reader_event.dart';
 import '../bloc/manga_reader_state.dart';
@@ -24,11 +29,33 @@ class MangaReaderScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BlocProvider(
-      create: (_) => MangaReaderBloc(
-        providerRepo: sl<ProviderRepository>(),
-        libraryRepo: sl<LibraryRepository>(),
-      )..add(MangaReaderStarted(book: book, chapterIndex: chapterIndex)),
+    // Seed the reader's layout from the persisted MangaPrefs so the user's
+    // global choice is honoured on every open. The in-reader pill row can
+    // still override it for the current session.
+    final mangaPrefs = sl<MangaPrefsCubit>().state;
+    final initialMode = mangaPrefs.readingDirection == MangaReadingDirection.vertical
+        ? ReaderMode.vertical
+        : ReaderMode.horizontal;
+    final initialDirection =
+        mangaPrefs.readingDirection == MangaReadingDirection.horizontalRtl
+            ? ReadingDirection.rtl
+            : ReadingDirection.ltr;
+    return MultiBlocProvider(
+      providers: [
+        BlocProvider.value(value: sl<NovelPrefsCubit>()),
+        BlocProvider.value(value: sl<MangaPrefsCubit>()),
+        BlocProvider(
+          create: (_) => MangaReaderBloc(
+            providerRepo: sl<ProviderRepository>(),
+            libraryRepo: sl<LibraryRepository>(),
+          )..add(MangaReaderStarted(
+              book: book,
+              chapterIndex: chapterIndex,
+              initialMode: initialMode,
+              initialDirection: initialDirection,
+            )),
+        ),
+      ],
       child: const _ReaderView(),
     );
   }
@@ -48,18 +75,121 @@ class _ReaderViewState extends State<_ReaderView> {
   // Used to detect overscroll at end of chapter -> auto-advance.
   bool _autoAdvanceArmed = false;
 
+  // Hardware volume-key navigation.
+  bool _volumeListenerActive = false;
+  double? _baselineVolume;
+  bool _suppressNextVolumeEvent = false;
+  StreamSubscription<NovelPrefs>? _prefsSub;
+
   @override
   void initState() {
     super.initState();
     _applyImmersive();
+    final prefs = context.read<NovelPrefsCubit>();
+    if (prefs.state.useVolumeButtons) {
+      _installVolumeListener();
+    }
+    _prefsSub = prefs.stream.listen((p) {
+      if (!mounted) return;
+      if (p.useVolumeButtons && !_volumeListenerActive) {
+        _installVolumeListener();
+      } else if (!p.useVolumeButtons && _volumeListenerActive) {
+        _uninstallVolumeListener();
+      }
+    });
   }
 
   @override
   void dispose() {
+    _prefsSub?.cancel();
+    _uninstallVolumeListener();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _scrollController.dispose();
     _pageController.dispose();
     super.dispose();
+  }
+
+  Future<void> _installVolumeListener() async {
+    if (_volumeListenerActive) return;
+    _volumeListenerActive = true;
+    try {
+      await FlutterVolumeController.updateShowSystemUI(false);
+      _baselineVolume = await FlutterVolumeController.getVolume();
+      FlutterVolumeController.addListener(_onVolumeChanged);
+    } catch (_) {
+      // Listener install failed (e.g. unsupported platform) — silently no-op.
+      _volumeListenerActive = false;
+    }
+  }
+
+  Future<void> _uninstallVolumeListener() async {
+    if (!_volumeListenerActive) return;
+    _volumeListenerActive = false;
+    try {
+      FlutterVolumeController.removeListener();
+      await FlutterVolumeController.updateShowSystemUI(true);
+    } catch (_) {
+      // Ignore — we're tearing down.
+    }
+  }
+
+  void _onVolumeChanged(double newVolume) {
+    if (!mounted) return;
+    if (_suppressNextVolumeEvent) {
+      _suppressNextVolumeEvent = false;
+      return;
+    }
+    final baseline = _baselineVolume ?? newVolume;
+    // Compare with a small dead-zone to avoid jitter.
+    final delta = newVolume - baseline;
+    if (delta.abs() < 0.005) {
+      _baselineVolume = newVolume;
+      return;
+    }
+    final pressedUp = delta > 0;
+    // Restore the OS volume so it doesn't drift after each press.
+    _suppressNextVolumeEvent = true;
+    // ignore: discarded_futures
+    // System UI suppression is handled globally via updateShowSystemUI(false)
+    // at install time; setVolume in 1.3.4 doesn't accept a per-call flag.
+    FlutterVolumeController.setVolume(baseline).catchError((_) {});
+    _baselineVolume = baseline;
+
+    final state = context.read<MangaReaderBloc>().state;
+    if (state.pages.isEmpty) return;
+    if (pressedUp) {
+      _advancePage(state, forward: true);
+    } else {
+      _advancePage(state, forward: false);
+    }
+  }
+
+  void _advancePage(MangaReaderState state, {required bool forward}) {
+    if (state.mode == ReaderMode.vertical) {
+      if (!_scrollController.hasClients) return;
+      final step = MediaQuery.of(context).size.height * 0.85;
+      final pos = _scrollController.position;
+      final target = (_scrollController.offset + (forward ? step : -step))
+          .clamp(pos.minScrollExtent, pos.maxScrollExtent);
+      _scrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
+    } else {
+      if (!_pageController.hasClients) return;
+      final current = state.pageIndex;
+      // PageView with `reverse: true` already maps page index 0..N to RTL
+      // reading order, so "next in reading order" is always `current + 1`.
+      final target = (current + (forward ? 1 : -1))
+          .clamp(0, state.pages.length - 1);
+      if (target == current) return;
+      _pageController.animateToPage(
+        target,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   void _applyImmersive() {
@@ -183,12 +313,48 @@ class _ReaderViewState extends State<_ReaderView> {
     return Scaffold(
       backgroundColor: Colors.black,
       body: BlocConsumer<MangaReaderBloc, MangaReaderState>(
-        listenWhen: (a, b) => a.chapterIndex != b.chapterIndex,
-        listener: (_, _) {
-          if (_scrollController.hasClients) _scrollController.jumpTo(0);
-          if (_pageController.hasClients) _pageController.jumpToPage(0);
+        listenWhen: (a, b) =>
+            a.chapterIndex != b.chapterIndex ||
+            (a.pendingResumeProgress != b.pendingResumeProgress) ||
+            (a.status != b.status),
+        listener: (ctx, state) {
+          // Reset scrollers when a new chapter starts loading.
+          if (state.status == ReaderStatus.loading) {
+            if (_scrollController.hasClients) _scrollController.jumpTo(0);
+            if (_pageController.hasClients) _pageController.jumpToPage(0);
+          }
+          // Apply pending resume once pages are loaded.
+          if (state.status == ReaderStatus.success &&
+              state.pendingResumeProgress != null &&
+              state.pages.isNotEmpty) {
+            final frac = state.pendingResumeProgress!.clamp(0.0, 1.0);
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              if (state.mode == ReaderMode.vertical) {
+                if (_scrollController.hasClients) {
+                  final max = _scrollController.position.maxScrollExtent;
+                  if (max > 0) {
+                    _scrollController.jumpTo(max * frac);
+                  }
+                }
+              } else {
+                if (_pageController.hasClients) {
+                  final target =
+                      (frac * (state.pages.length - 1)).round().clamp(
+                            0,
+                            state.pages.length - 1,
+                          );
+                  _pageController.jumpToPage(target);
+                }
+              }
+              ctx
+                  .read<MangaReaderBloc>()
+                  .add(const MangaReaderResumeConsumed());
+            });
+          }
         },
         builder: (context, state) {
+          final bgMode = context.watch<NovelPrefsCubit>().state.backgroundMode;
           return Stack(
             children: [
               GestureDetector(
@@ -196,6 +362,7 @@ class _ReaderViewState extends State<_ReaderView> {
                 onTap: _toggleChrome,
                 child: _PageContent(
                   state: state,
+                  bgMode: bgMode,
                   scrollController: _scrollController,
                   pageController: _pageController,
                   onTapLeft: () =>
@@ -278,15 +445,24 @@ class _ReaderViewState extends State<_ReaderView> {
   }
 
   Future<void> _openSettingsSheet(MangaReaderState state) async {
+    // Capture the bloc + cubit BEFORE the modal pushes its own context — the
+    // modal builds in the root Overlay, outside this screen's provider tree,
+    // so we have to re-expose them via BlocProvider.value.
     final bloc = context.read<MangaReaderBloc>();
+    final prefs = context.read<NovelPrefsCubit>();
     await showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (ctx) {
-        return BlocBuilder<MangaReaderBloc, MangaReaderState>(
-          bloc: bloc,
-          builder: (_, s) => _ReaderSettingsSheet(state: s, bloc: bloc),
+        return MultiBlocProvider(
+          providers: [
+            BlocProvider.value(value: bloc),
+            BlocProvider.value(value: prefs),
+          ],
+          child: BlocBuilder<MangaReaderBloc, MangaReaderState>(
+            builder: (_, s) => _ReaderSettingsSheet(state: s, bloc: bloc),
+          ),
         );
       },
     );
@@ -352,6 +528,17 @@ class _ReaderSettingsSheet extends StatelessWidget {
                 },
               ),
 
+              const SizedBox(height: 16),
+              _SectionLabel('Background'),
+              const SizedBox(height: 8),
+              BlocBuilder<NovelPrefsCubit, NovelPrefs>(
+                builder: (context, prefs) => ReadingBgPicker(
+                  value: prefs.backgroundMode,
+                  onChanged: (m) =>
+                      context.read<NovelPrefsCubit>().setBackgroundMode(m),
+                ),
+              ),
+
               const SizedBox(height: 18),
               _SectionLabel('Brightness'),
               const SizedBox(height: 4),
@@ -385,6 +572,34 @@ class _ReaderSettingsSheet extends StatelessWidget {
                   const Icon(Icons.brightness_high,
                       color: AppColors.textTertiary, size: 18),
                 ],
+              ),
+
+              const SizedBox(height: 18),
+              BlocBuilder<NovelPrefsCubit, NovelPrefs>(
+                builder: (context, prefs) => Row(
+                  children: [
+                    const Icon(Icons.volume_up_rounded,
+                        color: AppColors.textSecondary, size: 18),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        'Volume buttons',
+                        style: TextStyle(
+                          color: AppColors.textPrimary,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    Switch.adaptive(
+                      value: prefs.useVolumeButtons,
+                      activeTrackColor: AppColors.primary,
+                      onChanged: (v) => context
+                          .read<NovelPrefsCubit>()
+                          .setUseVolumeButtons(v),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -471,9 +686,75 @@ class _PillRow<T> extends StatelessWidget {
   }
 }
 
+class _NoPagesView extends StatelessWidget {
+  const _NoPagesView({
+    required this.subtitle,
+    required this.canNext,
+    required this.onNext,
+  });
+  final String subtitle;
+  final bool canNext;
+  final VoidCallback? onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.image_not_supported_outlined,
+                size: 56, color: AppColors.textTertiary),
+            const SizedBox(height: 14),
+            const Text(
+              'This chapter has no pages',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(height: 18),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () => context.pop(),
+                  icon: const Icon(Icons.arrow_back, size: 16),
+                  label: const Text('Back'),
+                ),
+                const SizedBox(width: 10),
+                ElevatedButton.icon(
+                  onPressed: canNext ? onNext : null,
+                  icon: const Icon(Icons.skip_next, size: 16),
+                  label: const Text('Next chapter'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _PageContent extends StatelessWidget {
   const _PageContent({
     required this.state,
+    required this.bgMode,
     required this.scrollController,
     required this.pageController,
     required this.onTapLeft,
@@ -483,6 +764,7 @@ class _PageContent extends StatelessWidget {
     required this.onTryAutoAdvance,
   });
   final MangaReaderState state;
+  final ReadingBgMode bgMode;
   final ScrollController scrollController;
   final PageController pageController;
   final VoidCallback onTapLeft;
@@ -494,6 +776,22 @@ class _PageContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (state.status == ReaderStatus.loading) return const LoadingView();
+    final book = state.book;
+    final hasPages = state.pages.isNotEmpty;
+    if (!hasPages &&
+        (state.status == ReaderStatus.error ||
+            state.status == ReaderStatus.success)) {
+      final canNext = book != null && state.chapterIndex - 1 >= 0;
+      return _NoPagesView(
+        subtitle: state.error ?? 'Try another chapter or source',
+        canNext: canNext,
+        onNext: canNext
+            ? () => context
+                .read<MangaReaderBloc>()
+                .add(MangaReaderChapterChanged(state.chapterIndex - 1))
+            : null,
+      );
+    }
     if (state.status == ReaderStatus.error) {
       return ErrorView(
         message: state.error ?? 'Failed to load pages',
@@ -502,11 +800,11 @@ class _PageContent extends StatelessWidget {
             .add(MangaReaderChapterChanged(state.chapterIndex)),
       );
     }
-    if (state.pages.isEmpty) return const EmptyView(message: 'No pages');
 
     if (state.mode == ReaderMode.vertical) {
       return _VerticalReader(
         state: state,
+        bgMode: bgMode,
         controller: scrollController,
         onArm: onArmAutoAdvance,
         onTryAdvance: onTryAutoAdvance,
@@ -525,17 +823,22 @@ class _PageContent extends StatelessWidget {
 class _VerticalReader extends StatelessWidget {
   const _VerticalReader({
     required this.state,
+    required this.bgMode,
     required this.controller,
     required this.onArm,
     required this.onTryAdvance,
   });
   final MangaReaderState state;
+  final ReadingBgMode bgMode;
   final ScrollController controller;
   final VoidCallback onArm;
   final VoidCallback onTryAdvance;
 
   @override
   Widget build(BuildContext context) {
+    final gap = ReadingBg.mangaGapFor(bgMode, context);
+    final isLight = bgMode == ReadingBgMode.white || bgMode == ReadingBgMode.sepia;
+    final footerText = isLight ? Colors.black38 : Colors.white38;
     return NotificationListener<ScrollNotification>(
       onNotification: (n) {
         if (n is ScrollUpdateNotification) {
@@ -558,30 +861,33 @@ class _VerticalReader extends StatelessWidget {
         }
         return false;
       },
-      child: InteractiveViewer(
-        minScale: 1,
-        maxScale: 4,
-        panEnabled: true,
-        child: ListView.builder(
-          controller: controller,
-          cacheExtent: MediaQuery.of(context).size.height * 4,
-          itemCount: state.pages.length,
-          itemBuilder: (_, i) => Padding(
-            padding: const EdgeInsets.symmetric(vertical: 1),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                PageImage(page: state.pages[i]),
-                Container(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  color: Colors.black,
-                  child: Text(
-                    '${i + 1} / ${state.pages.length}',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white38, fontSize: 11),
+      child: Container(
+        color: gap,
+        child: InteractiveViewer(
+          minScale: 1,
+          maxScale: 4,
+          panEnabled: true,
+          child: ListView.builder(
+            controller: controller,
+            cacheExtent: MediaQuery.of(context).size.height * 4,
+            itemCount: state.pages.length,
+            itemBuilder: (_, i) => Padding(
+              padding: const EdgeInsets.symmetric(vertical: 1),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  PageImage(page: state.pages[i]),
+                  Container(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    color: gap,
+                    child: Text(
+                      '${i + 1} / ${state.pages.length}',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: footerText, fontSize: 11),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),

@@ -12,12 +12,14 @@ class BookCard extends StatelessWidget {
     this.onTap,
     this.width = 124,
     this.progress,
+    this.subtitle,
   });
 
   final BookItem book;
   final VoidCallback? onTap;
   final double width;
   final double? progress;
+  final String? subtitle;
 
   @override
   Widget build(BuildContext context) {
@@ -71,6 +73,18 @@ class BookCard extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.titleMedium?.copyWith(height: 1.2),
             ),
+            if (subtitle != null) ...[
+              const SizedBox(height: 2),
+              Text(
+                subtitle!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.textSecondary,
+                      fontSize: 11,
+                    ),
+              ),
+            ],
           ],
         ),
       ),

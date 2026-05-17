@@ -33,6 +33,19 @@ class _JsHost {
   final Map<String, JsProvider> providers = {};
   // Mutex so JS calls don't overlap (QuickJS is single-threaded).
   Future<void> _queue = Future.value();
+  // Per-source failure tracking. A provider with 3+ consecutive failures is
+  // marked `broken`; one with any prior failure but a recent success may be
+  // `degraded` until cleared.
+  final Map<String, _ProviderHealth> _health = {};
+
+  ProviderHealthStatus healthFor(String sourceId) =>
+      _health[sourceId]?.status ?? ProviderHealthStatus.healthy;
+  String? lastErrorFor(String sourceId) => _health[sourceId]?.lastError;
+  int failuresFor(String sourceId) => _health[sourceId]?.failures ?? 0;
+
+  void resetHealth(String sourceId) {
+    _health.remove(sourceId);
+  }
 
   Future<void> loadProvider(String sourceId, String jsSource) async {
     final wrapped = wrapProviderSource(sourceId, jsSource);
@@ -52,15 +65,44 @@ class _JsHost {
     final completer = Completer<void>();
     final prev = _queue;
     _queue = completer.future;
-    await prev;
+    // Wait for the previous call to finish — but swallow its error so a
+    // panicking call from provider A can't poison the mutex for provider B.
+    try {
+      await prev;
+    } catch (_) {/* isolate: previous caller already received this error */}
     try {
       final v = await _runCall(sourceId, method, args);
+      _recordSuccess(sourceId);
       completer.complete();
       return v;
     } catch (e) {
+      _recordFailure(sourceId, e);
+      // Always release the mutex even when this call threw, so other
+      // providers keep working.
       completer.complete();
       rethrow;
     }
+  }
+
+  void _recordSuccess(String sourceId) {
+    final h = _health[sourceId];
+    if (h == null) return;
+    // A success clears the failure streak; keep degraded status until reset
+    // only if it was broken (so the UI shows recovery as healthy).
+    _health.remove(sourceId);
+  }
+
+  void _recordFailure(String sourceId, Object error) {
+    final prev = _health[sourceId];
+    final failures = (prev?.failures ?? 0) + 1;
+    final status = failures >= 3
+        ? ProviderHealthStatus.broken
+        : ProviderHealthStatus.degraded;
+    _health[sourceId] = _ProviderHealth(
+      failures: failures,
+      lastError: error.toString(),
+      status: status,
+    );
   }
 
   Future<String> _runCall(String sourceId, String method, List<Object?> args) async {
@@ -171,6 +213,19 @@ class _JsHost {
   }
 }
 
+enum ProviderHealthStatus { healthy, degraded, broken }
+
+class _ProviderHealth {
+  _ProviderHealth({
+    required this.failures,
+    required this.lastError,
+    required this.status,
+  });
+  final int failures;
+  final String lastError;
+  final ProviderHealthStatus status;
+}
+
 /// Thin per-source wrapper. Calls go through the shared _JsHost.
 class JsProvider implements BaseProvider {
   JsProvider._({required this.sourceId, required _JsHost host}) : _host = host;
@@ -181,6 +236,11 @@ class JsProvider implements BaseProvider {
 
   /// Optional sink for JS console messages.
   void Function(String level, String message)? onConsole;
+
+  ProviderHealthStatus get healthStatus => _host.healthFor(sourceId);
+  String? get lastError => _host.lastErrorFor(sourceId);
+  int get failureCount => _host.failuresFor(sourceId);
+  void resetHealth() => _host.resetHealth(sourceId);
 
   Future<String> _call(String method, List<Object?> args) =>
       _host.call(sourceId, method, args);
@@ -248,7 +308,10 @@ class ProviderManager {
   void remove(String id) {
     _host.removeProvider(id);
     _host.providers.remove(id);
+    _host.resetHealth(id);
   }
+
+  void resetHealth(String id) => _host.resetHealth(id);
 
   void disposeAll() {
     _host.providers.clear();

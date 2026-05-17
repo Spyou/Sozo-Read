@@ -2,13 +2,19 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shimmer/shimmer.dart';
+
+import 'package:dio/dio.dart';
 
 import '../../../core/di/injection.dart';
 import '../../../core/models/book_detail.dart';
 import '../../../core/models/book_item.dart';
 import '../../../core/models/chapter.dart';
+import '../../../core/repository/downloads_repository.dart';
 import '../../../core/repository/library_repository.dart';
 import '../../../core/repository/provider_repository.dart';
+import '../../../core/repository/read_chapters_repository.dart';
+import '../../../core/state/auth_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/book_card.dart';
 import '../../../core/widgets/state_views.dart';
@@ -29,6 +35,7 @@ class DetailScreen extends StatelessWidget {
       create: (_) => DetailBloc(
         providerRepo: sl<ProviderRepository>(),
         libraryRepo: sl<LibraryRepository>(),
+        readChaptersRepo: sl<ReadChaptersRepository>(),
       )..add(DetailLoaded(sourceId: sourceId, url: url)),
       child: _DetailView(placeholder: placeholder),
     );
@@ -38,6 +45,43 @@ class DetailScreen extends StatelessWidget {
 class _DetailView extends StatelessWidget {
   const _DetailView({this.placeholder});
   final BookItem? placeholder;
+
+  Future<void> _handleToggleLibrary(BuildContext context) async {
+    // Saving to library requires a signed-in account so the entries can be
+    // cloud-synced (Round 4 sync engine). When signed out, surface the
+    // requirement inline instead of silently writing a local-only entry
+    // that would be wiped on the next sign-in.
+    if (!sl<AuthService>().isSignedIn) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Sign in to save manga to your library.'),
+          action: SnackBarAction(
+            label: 'Sign in',
+            textColor: Colors.white,
+            onPressed: () => context.push('/auth'),
+          ),
+        ),
+      );
+      return;
+    }
+    final bloc = context.read<DetailBloc>();
+    final currentStatus = bloc.state.library?.status;
+    final result = await showModalBottomSheet<_LibraryAction>(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A1A),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetCtx) =>
+          _LibraryStatusSheet(currentStatus: currentStatus),
+    );
+    if (result == null) return;
+    if (result.remove) {
+      bloc.add(const DetailLibraryRemoved());
+    } else if (result.status != null) {
+      bloc.add(DetailLibrarySaved(result.status!));
+    }
+  }
 
   void _openReader(BuildContext context, BookDetail book, int chapterIndex) {
     final isManga = book.type.name != 'novel';
@@ -72,9 +116,10 @@ class _DetailView extends StatelessWidget {
             book: book,
             inLibrary: state.inLibrary,
             lastChapterIndex: state.library?.lastChapterIndex ?? 0,
+            readChapterIds: state.readChapterIds,
             similar: state.similar,
             similarLoading: state.similarStatus == SimilarStatus.loading,
-            onToggleLibrary: () => context.read<DetailBloc>().add(const DetailLibraryToggled()),
+            onToggleLibrary: () => _handleToggleLibrary(context),
             onOpenChapter: (i) => _openReader(context, book, i),
           );
         },
@@ -88,6 +133,7 @@ class _DetailBody extends StatefulWidget {
     required this.book,
     required this.inLibrary,
     required this.lastChapterIndex,
+    required this.readChapterIds,
     required this.similar,
     required this.similarLoading,
     required this.onToggleLibrary,
@@ -97,6 +143,7 @@ class _DetailBody extends StatefulWidget {
   final BookDetail book;
   final bool inLibrary;
   final int lastChapterIndex;
+  final Set<String> readChapterIds;
   final List<BookItem> similar;
   final bool similarLoading;
   final VoidCallback onToggleLibrary;
@@ -332,42 +379,94 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
         controller: _tabController,
         children: [
           // ---- Chapters ----
-          ListView.separated(
-            padding: EdgeInsets.zero,
-            itemCount: book.chapters.length,
-            separatorBuilder: (_, _) => const Divider(height: 1),
-            itemBuilder: (_, i) {
-              final Chapter ch = book.chapters[i];
-              final read = i < lastChapterIndex;
-              return ListTile(
-                dense: true,
-                onTap: () => onOpenChapter(i),
-                title: Text(
-                  ch.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: read ? AppColors.textTertiary : AppColors.textPrimary,
-                    fontWeight:
-                        i == lastChapterIndex ? FontWeight.w600 : FontWeight.w400,
+          _RefreshableTab(
+            child: book.chapters.isEmpty
+                ? ListView(
+                    // ListView so the RefreshIndicator can still be triggered.
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: const [
+                      SizedBox(height: 48),
+                      EmptyView(
+                        icon: Icons.menu_book_outlined,
+                        message:
+                            'No chapters available from this source.\nTry another source.',
+                      ),
+                    ],
+                  )
+                : ListView.separated(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: EdgeInsets.zero,
+                    itemCount: book.chapters.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final Chapter ch = book.chapters[i];
+                      // A chapter is "finished" when either (a) the user
+                      // explicitly hit the end (tracked in
+                      // ReadChaptersRepository) or (b) progress has moved
+                      // past it via the library entry's lastChapterIndex.
+                      final read = widget.readChapterIds.contains(ch.id) ||
+                          i < lastChapterIndex;
+                      final titleStyle = TextStyle(
+                        color: read
+                            ? AppColors.textTertiary
+                            : AppColors.textPrimary,
+                        fontWeight: i == lastChapterIndex
+                            ? FontWeight.w600
+                            : FontWeight.w400,
+                      );
+                      final titleText = Text(
+                        ch.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: titleStyle,
+                      );
+                      return ListTile(
+                        dense: true,
+                        onTap: () => onOpenChapter(i),
+                        title: Opacity(
+                          opacity: read ? 0.5 : 1.0,
+                          child: titleText,
+                        ),
+                        subtitle: ch.date != null
+                            ? Opacity(
+                                opacity: read ? 0.5 : 1.0,
+                                child: Text(
+                                  ch.date!,
+                                  style: const TextStyle(
+                                    color: AppColors.textTertiary,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              )
+                            : null,
+                        trailing: SizedBox(
+                          width: 64,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (i == lastChapterIndex)
+                                const Padding(
+                                  padding: EdgeInsets.only(right: 4),
+                                  child: Icon(Icons.play_circle,
+                                      color: AppColors.primary, size: 20),
+                                ),
+                              _ChapterDownloadButton(book: book, chapter: ch),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
                   ),
-                ),
-                subtitle: ch.date != null
-                    ? Text(ch.date!,
-                        style: const TextStyle(color: AppColors.textTertiary, fontSize: 11))
-                    : null,
-                trailing: i == lastChapterIndex
-                    ? const Icon(Icons.play_circle, color: AppColors.primary, size: 20)
-                    : null,
-              );
-            },
           ),
           // ---- More like this ----
-          _SimilarTab(
-            similar: similar,
-            loading: similarLoading,
-            onOpen: (b) => _openSimilar(context, b),
-            hasGenres: book.genres.isNotEmpty,
+          _RefreshableTab(
+            child: _SimilarTab(
+              similar: similar,
+              loading: similarLoading,
+              onOpen: (b) => _openSimilar(context, b),
+              hasGenres: book.genres.isNotEmpty,
+            ),
           ),
           // ---- Details ----
           _DetailsTab(
@@ -419,26 +518,46 @@ class _SimilarTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (loading && similar.isEmpty) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.only(top: 32),
-          child: SizedBox(
-            width: 24, height: 24,
-            child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [
+          SizedBox(height: 48),
+          Center(
+            child: SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppColors.primary,
+              ),
+            ),
           ),
-        ),
+        ],
       );
     }
     if (!hasGenres) {
-      return const EmptyView(
-        message: 'No genres found for this book — nothing to compare against.',
-        icon: Icons.label_outline,
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [
+          SizedBox(height: 48),
+          EmptyView(
+            message: 'No genres found for this book — nothing to compare against.',
+            icon: Icons.label_outline,
+          ),
+        ],
       );
     }
     if (similar.isEmpty) {
-      return const EmptyView(message: 'No similar books found.');
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [
+          SizedBox(height: 48),
+          EmptyView(message: 'No similar books found.'),
+        ],
+      );
     }
     return GridView.builder(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(12, 14, 12, 24),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
@@ -451,6 +570,27 @@ class _SimilarTab extends StatelessWidget {
         book: similar[i],
         onTap: () => onOpen(similar[i]),
       ),
+    );
+  }
+}
+
+class _RefreshableTab extends StatelessWidget {
+  const _RefreshableTab({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return RefreshIndicator(
+      color: scheme.primary,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      onRefresh: () async {
+        context.read<DetailBloc>().add(const DetailReloaded());
+        // Await one frame so the indicator stays visible briefly; the bloc
+        // will emit new state and rebuild the tab when the fetch completes.
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+      },
+      child: child,
     );
   }
 }
@@ -664,35 +804,476 @@ class _SkeletonDetail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        SizedBox(
-          height: 340,
-          child: placeholder?.cover != null
-              ? Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    CachedNetworkImage(
-                      imageUrl: placeholder!.cover!,
-                      httpHeaders: placeholder!.coverHeaders,
-                      fit: BoxFit.cover,
+    final hasCover = placeholder?.cover != null;
+    return CustomScrollView(
+      physics: const NeverScrollableScrollPhysics(),
+      slivers: [
+        SliverToBoxAdapter(
+          child: SizedBox(
+            height: 340,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (hasCover)
+                  CachedNetworkImage(
+                    imageUrl: placeholder!.cover!,
+                    httpHeaders: placeholder!.coverHeaders,
+                    fit: BoxFit.cover,
+                    alignment: Alignment.topCenter,
+                  )
+                else
+                  const _ShimmerBlock(
+                    height: double.infinity,
+                    radius: 0,
+                  ),
+                const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Color(0x66000000),
+                        Color(0xAA0A0A0A),
+                        AppColors.background,
+                      ],
+                      stops: [0.0, 0.65, 1.0],
                     ),
-                    const DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [Color(0x66000000), AppColors.background],
-                          stops: [0.5, 1.0],
+                  ),
+                ),
+                Positioned(
+                  left: 20,
+                  right: 20,
+                  bottom: 20,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      SizedBox(
+                        height: 170,
+                        child: AspectRatio(
+                          aspectRatio: 2 / 3,
+                          child: hasCover
+                              ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: CachedNetworkImage(
+                                    imageUrl: placeholder!.cover!,
+                                    httpHeaders: placeholder!.coverHeaders,
+                                    fit: BoxFit.cover,
+                                  ),
+                                )
+                              : const _ShimmerBlock(
+                                  height: double.infinity,
+                                  radius: 10,
+                                ),
                         ),
                       ),
-                    ),
-                  ],
-                )
-              : Container(color: AppColors.card),
+                      const SizedBox(width: 14),
+                      const Expanded(
+                        child: Padding(
+                          padding: EdgeInsets.only(bottom: 6),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _ShimmerBlock(height: 18, widthFactor: 0.9),
+                              SizedBox(height: 8),
+                              _ShimmerBlock(height: 18, widthFactor: 0.6),
+                              SizedBox(height: 12),
+                              _ShimmerBlock(height: 14, widthFactor: 0.4),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
-        const Expanded(child: LoadingView()),
+        const SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(16, 18, 16, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _ShimmerBlock(height: 12, widthFactor: 1.0),
+                SizedBox(height: 8),
+                _ShimmerBlock(height: 12, widthFactor: 0.95),
+                SizedBox(height: 8),
+                _ShimmerBlock(height: 12, widthFactor: 0.6),
+                SizedBox(height: 18),
+                // Genre chips
+                Row(
+                  children: [
+                    _ShimmerBlock(width: 64, height: 26, radius: 14),
+                    SizedBox(width: 6),
+                    _ShimmerBlock(width: 80, height: 26, radius: 14),
+                    SizedBox(width: 6),
+                    _ShimmerBlock(width: 54, height: 26, radius: 14),
+                  ],
+                ),
+                SizedBox(height: 18),
+                _ShimmerBlock(height: 48, radius: 10),
+              ],
+            ),
+          ),
+        ),
+        // Tab bar shimmer
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
+            child: Row(
+              children: const [
+                _ShimmerBlock(width: 80, height: 14),
+                SizedBox(width: 18),
+                _ShimmerBlock(width: 100, height: 14),
+                SizedBox(width: 18),
+                _ShimmerBlock(width: 60, height: 14),
+              ],
+            ),
+          ),
+        ),
+        const SliverToBoxAdapter(child: Divider(height: 1)),
+        SliverList.builder(
+          itemCount: 7,
+          itemBuilder: (_, _) => const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _ShimmerBlock(height: 13, widthFactor: 0.7),
+                SizedBox(height: 6),
+                _ShimmerBlock(height: 10, widthFactor: 0.3),
+              ],
+            ),
+          ),
+        ),
       ],
+    );
+  }
+}
+
+class _ChapterDownloadButton extends StatelessWidget {
+  const _ChapterDownloadButton({required this.book, required this.chapter});
+
+  final BookDetail book;
+  final Chapter chapter;
+
+  Future<void> _start(BuildContext context) async {
+    final repo = sl<DownloadsRepository>();
+    final providerRepo = sl<ProviderRepository>();
+    final dio = sl<Dio>();
+    final messenger = ScaffoldMessenger.of(context);
+
+    final pagesRes = await providerRepo.pages(book.sourceId, chapter.url);
+    pagesRes.fold(
+      (f) => messenger.showSnackBar(
+        SnackBar(content: Text('Failed to fetch pages: ${f.message}')),
+      ),
+      (pages) {
+        if (pages.isEmpty) {
+          messenger.showSnackBar(
+            const SnackBar(content: Text('No pages to download')),
+          );
+          return;
+        }
+        // Fire-and-forget; the repo emits via watch().
+        // ignore: discarded_futures
+        repo.enqueue(book, chapter, pages, dio);
+        messenger.showSnackBar(
+          SnackBar(content: Text('Downloading ${chapter.title}…')),
+        );
+      },
+    );
+  }
+
+  Future<void> _confirmDelete(BuildContext context) async {
+    final repo = sl<DownloadsRepository>();
+    await repo.delete(book.sourceId, book.id, chapter.id);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Download deleted')),
+    );
+  }
+
+  Future<void> _cancel(BuildContext context) async {
+    final repo = sl<DownloadsRepository>();
+    await repo.cancel(book.sourceId, book.id, chapter.id);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Download cancelled')),
+    );
+  }
+
+  Future<void> _doneMenu(BuildContext context) async {
+    final accent = Theme.of(context).colorScheme.primary;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(Icons.delete_outline, color: accent),
+              title: const Text('Delete download'),
+              onTap: () => Navigator.pop(ctx, 'delete'),
+            ),
+            ListTile(
+              leading: Icon(Icons.refresh, color: accent),
+              title: const Text('Re-download'),
+              onTap: () => Navigator.pop(ctx, 'redownload'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!context.mounted) return;
+    if (action == 'delete') {
+      await _confirmDelete(context);
+    } else if (action == 'redownload') {
+      await _confirmDelete(context);
+      if (!context.mounted) return;
+      await _start(context);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = sl<DownloadsRepository>();
+    final accent = Theme.of(context).colorScheme.primary;
+
+    return StreamBuilder<DownloadEntry>(
+      stream: repo.watch(book.sourceId, book.id, chapter.id),
+      builder: (context, snap) {
+        final entry = snap.data ?? repo.get(book.sourceId, book.id, chapter.id);
+        final isDeleted = entry?.error == '__deleted__';
+        final effective = isDeleted ? null : entry;
+
+        if (effective == null) {
+          return IconButton(
+            tooltip: 'Download',
+            icon: const Icon(Icons.download_outlined,
+                color: AppColors.textTertiary, size: 20),
+            visualDensity: VisualDensity.compact,
+            onPressed: () => _start(context),
+          );
+        }
+        switch (effective.status) {
+          case DownloadStatus.queued:
+          case DownloadStatus.downloading:
+            final progress = effective.total == 0
+                ? null
+                : effective.completed / effective.total;
+            return GestureDetector(
+              onLongPress: () => _cancel(context),
+              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'Downloading… ${effective.completed}/${effective.total}',
+                  ),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    value: progress,
+                    color: accent,
+                  ),
+                ),
+              ),
+            );
+          case DownloadStatus.done:
+            return GestureDetector(
+              onLongPress: () => _doneMenu(context),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Icon(Icons.check_circle, color: accent, size: 20),
+              ),
+            );
+          case DownloadStatus.failed:
+            return IconButton(
+              tooltip: 'Retry download',
+              icon: const Icon(Icons.error_outline,
+                  color: AppColors.warning, size: 20),
+              visualDensity: VisualDensity.compact,
+              onPressed: () => _start(context),
+            );
+        }
+      },
+    );
+  }
+}
+
+class _ShimmerBlock extends StatelessWidget {
+  const _ShimmerBlock({
+    this.width,
+    this.height = 12,
+    this.widthFactor,
+    this.radius = 4,
+  });
+
+  final double? width;
+  final double height;
+  final double? widthFactor;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) {
+    final block = Shimmer.fromColors(
+      baseColor: AppColors.shimmerBase,
+      highlightColor: AppColors.shimmerHighlight,
+      child: Container(
+        width: width ?? double.infinity,
+        height: height,
+        decoration: BoxDecoration(
+          color: AppColors.card,
+          borderRadius: BorderRadius.circular(radius),
+        ),
+      ),
+    );
+    if (widthFactor != null) {
+      return FractionallySizedBox(
+        alignment: Alignment.centerLeft,
+        widthFactor: widthFactor,
+        child: block,
+      );
+    }
+    return block;
+  }
+}
+
+/// Result envelope from the library status sheet. Either picks a status
+/// (add/update) or signals removal. Null means dismissed without choosing.
+class _LibraryAction {
+  const _LibraryAction._({this.status, this.remove = false});
+  const _LibraryAction.status(LibraryStatus s) : this._(status: s);
+  const _LibraryAction.remove() : this._(remove: true);
+
+  final LibraryStatus? status;
+  final bool remove;
+}
+
+/// Bottom sheet shown when the user taps the bookmark icon. Lets them pick
+/// which library shelf the book belongs on (Reading / On hold / Plan to
+/// read / Completed) or remove it altogether. The current status (if any)
+/// is highlighted with the theme accent.
+class _LibraryStatusSheet extends StatelessWidget {
+  const _LibraryStatusSheet({this.currentStatus});
+
+  final LibraryStatus? currentStatus;
+
+  static const _options = <(LibraryStatus, String, IconData)>[
+    (LibraryStatus.reading, 'Reading', Icons.menu_book_rounded),
+    (LibraryStatus.onHold, 'On hold', Icons.pause_circle_outline_rounded),
+    (LibraryStatus.planning, 'Plan to read', Icons.event_note_rounded),
+    (LibraryStatus.completed, 'Completed', Icons.check_circle_outline_rounded),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isInLibrary = currentStatus != null;
+    return SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 12),
+          Container(
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                isInLibrary ? 'Move to' : 'Save to library',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          for (final opt in _options)
+            _StatusRow(
+              icon: opt.$3,
+              label: opt.$2,
+              selected: currentStatus == opt.$1,
+              accent: theme.colorScheme.primary,
+              onTap: () => Navigator.pop(
+                context,
+                _LibraryAction.status(opt.$1),
+              ),
+            ),
+          if (isInLibrary) ...[
+            Divider(
+              color: Colors.white.withValues(alpha: 0.08),
+              height: 1,
+              indent: 16,
+              endIndent: 16,
+            ),
+            ListTile(
+              leading: const Icon(
+                Icons.delete_outline_rounded,
+                color: Color(0xFFE57373),
+              ),
+              title: const Text(
+                'Remove from library',
+                style: TextStyle(color: Color(0xFFE57373)),
+              ),
+              onTap: () =>
+                  Navigator.pop(context, const _LibraryAction.remove()),
+            ),
+          ],
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusRow extends StatelessWidget {
+  const _StatusRow({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.accent,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final Color accent;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      onTap: onTap,
+      leading: Icon(icon, color: selected ? accent : Colors.white70),
+      title: Text(
+        label,
+        style: TextStyle(
+          color: selected ? accent : Colors.white,
+          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+        ),
+      ),
+      trailing: selected
+          ? Icon(Icons.check_rounded, color: accent, size: 22)
+          : null,
     );
   }
 }

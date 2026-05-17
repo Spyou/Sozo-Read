@@ -13,6 +13,8 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
         super(const SearchState()) {
     on<SearchQueryChanged>(_onQueryChanged);
     on<SearchSourceChanged>(_onSourceChanged);
+    on<SearchGenreChanged>(_onGenreChanged);
+    on<SearchSortChanged>(_onSortChanged);
     on<SearchSubmitted>(_onSubmitted);
   }
 
@@ -21,10 +23,15 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
   int _runId = 0;
 
   void _onQueryChanged(SearchQueryChanged event, Emitter<SearchState> emit) {
-    emit(state.copyWith(query: event.query));
+    // New query resets sort back to default (per spec).
+    emit(state.copyWith(query: event.query, sort: SearchSort.bestMatch));
     _debounce?.cancel();
     if (event.query.trim().isEmpty) {
-      emit(state.copyWith(results: const [], status: SearchStatus.idle, clearError: true));
+      emit(state.copyWith(
+        results: const [],
+        status: SearchStatus.idle,
+        clearError: true,
+      ));
       return;
     }
     _debounce = Timer(const Duration(milliseconds: 400), () => add(const SearchSubmitted()));
@@ -38,6 +45,18 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
     if (state.query.trim().isNotEmpty) add(const SearchSubmitted());
   }
 
+  void _onGenreChanged(SearchGenreChanged event, Emitter<SearchState> emit) {
+    emit(state.copyWith(
+      genre: event.genre,
+      clearGenre: event.genre == null,
+    ));
+    if (state.query.trim().isNotEmpty) add(const SearchSubmitted());
+  }
+
+  void _onSortChanged(SearchSortChanged event, Emitter<SearchState> emit) {
+    emit(state.copyWith(sort: event.sort));
+  }
+
   Future<void> _onSubmitted(SearchSubmitted event, Emitter<SearchState> emit) async {
     final q = state.query.trim();
     if (q.isEmpty) return;
@@ -45,13 +64,35 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
     emit(state.copyWith(status: SearchStatus.loading, clearError: true));
 
     final source = state.sourceId;
+    final category = state.genre ?? '';
     if (source != null) {
-      final result = await _repo.search(source, q);
+      final result = await _repo.search(source, q, category: category);
       if (runId != _runId) return;
       result.fold(
         (f) => emit(state.copyWith(status: SearchStatus.error, error: f.message)),
         (books) => emit(state.copyWith(status: SearchStatus.success, results: books)),
       );
+      return;
+    }
+
+    // No "All sources" overload accepts category, so reuse provider-level
+    // search when a genre is active; otherwise use the aggregate helper.
+    if (state.genre != null && state.genre!.isNotEmpty) {
+      final merged = <BookItem>[];
+      String? firstError;
+      await Future.wait(_repo.providers.map((p) async {
+        final r = await _repo.search(p.sourceId, q, category: category);
+        r.fold(
+          (f) => firstError ??= f.message,
+          (books) => merged.addAll(books),
+        );
+      }));
+      if (runId != _runId) return;
+      if (merged.isEmpty && firstError != null) {
+        emit(state.copyWith(status: SearchStatus.error, error: firstError));
+      } else {
+        emit(state.copyWith(status: SearchStatus.success, results: merged));
+      }
       return;
     }
 

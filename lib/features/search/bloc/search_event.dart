@@ -1,5 +1,7 @@
 import 'package:equatable/equatable.dart';
 
+import 'search_state.dart';
+
 abstract class SearchEvent extends Equatable {
   const SearchEvent();
   @override
@@ -18,6 +20,20 @@ class SearchSourceChanged extends SearchEvent {
   final String? sourceId;
   @override
   List<Object?> get props => [sourceId];
+}
+
+class SearchGenreChanged extends SearchEvent {
+  const SearchGenreChanged(this.genre);
+  final String? genre;
+  @override
+  List<Object?> get props => [genre];
+}
+
+class SearchSortChanged extends SearchEvent {
+  const SearchSortChanged(this.sort);
+  final SearchSort sort;
+  @override
+  List<Object?> get props => [sort];
 }
 
 class SearchSubmitted extends SearchEvent {

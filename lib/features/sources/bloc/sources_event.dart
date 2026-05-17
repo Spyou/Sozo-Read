@@ -35,3 +35,10 @@ class SourceUpdated extends SourcesEvent {
   @override
   List<Object?> get props => [name];
 }
+
+class SourceHealthReset extends SourcesEvent {
+  const SourceHealthReset(this.name);
+  final String name;
+  @override
+  List<Object?> get props => [name];
+}

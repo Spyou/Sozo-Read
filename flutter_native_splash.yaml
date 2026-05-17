@@ -1,0 +1,20 @@
+# Sozo Read native splash configuration.
+# Run: dart run flutter_native_splash:create --path=flutter_native_splash.yaml
+flutter_native_splash:
+  color: "#0A0A0A"
+  color_dark: "#0A0A0A"
+  image: assets/branding/sozo_logo_red.png
+  image_dark: assets/branding/sozo_logo_red.png
+
+  android_12:
+    color: "#0A0A0A"
+    color_dark: "#0A0A0A"
+    image: assets/branding/sozo_logo_red.png
+    image_dark: assets/branding/sozo_logo_red.png
+    icon_background_color: "#0A0A0A"
+    icon_background_color_dark: "#0A0A0A"
+
+  android: true
+  ios: true
+  web: false
+  fullscreen: true

@@ -24,6 +24,11 @@ class MangaReaderState extends Equatable {
   /// Loading-spinner shown while auto-advancing to the next chapter.
   final bool autoAdvancing;
 
+  /// 0..1 — resume position requested by the library entry for the *current*
+  /// pages load. Consumed once by the screen and then cleared via
+  /// [MangaReaderResumeConsumed].
+  final double? pendingResumeProgress;
+
   const MangaReaderState({
     this.book,
     this.chapterIndex = 0,
@@ -35,6 +40,7 @@ class MangaReaderState extends Equatable {
     this.direction = ReadingDirection.ltr,
     this.brightness = 0,
     this.autoAdvancing = false,
+    this.pendingResumeProgress,
   });
 
   MangaReaderState copyWith({
@@ -48,7 +54,9 @@ class MangaReaderState extends Equatable {
     ReadingDirection? direction,
     double? brightness,
     bool? autoAdvancing,
+    double? pendingResumeProgress,
     bool clearError = false,
+    bool clearResume = false,
   }) =>
       MangaReaderState(
         book: book ?? this.book,
@@ -61,6 +69,9 @@ class MangaReaderState extends Equatable {
         direction: direction ?? this.direction,
         brightness: brightness ?? this.brightness,
         autoAdvancing: autoAdvancing ?? this.autoAdvancing,
+        pendingResumeProgress: clearResume
+            ? null
+            : (pendingResumeProgress ?? this.pendingResumeProgress),
       );
 
   @override
@@ -75,5 +86,6 @@ class MangaReaderState extends Equatable {
         direction,
         brightness,
         autoAdvancing,
+        pendingResumeProgress,
       ];
 }

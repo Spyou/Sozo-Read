@@ -4,9 +4,11 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/di/injection.dart';
 import '../../../core/repository/library_repository.dart';
+import '../../../core/sync/library_sync_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/book_card.dart';
 import '../../../core/widgets/state_views.dart';
+import '../../../core/widgets/sync_status_badge.dart';
 import '../bloc/library_bloc.dart';
 import '../bloc/library_event.dart';
 import '../bloc/library_state.dart';
@@ -43,6 +45,7 @@ class _LibraryView extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Library'),
         actions: [
+          const SyncStatusBadge(),
           Builder(
             builder: (ctx) => IconButton(
               tooltip: 'Sort',
@@ -95,43 +98,92 @@ class _LibraryView extends StatelessWidget {
             child: BlocBuilder<LibraryBloc, LibraryState>(
               builder: (context, state) {
                 final items = state.filtered;
-                if (items.isEmpty) {
-                  final hasQuery = state.query.trim().isNotEmpty;
-                  return EmptyView(
-                    message: hasQuery
-                        ? "No matches for '${state.query.trim()}'"
-                        : 'No saved books yet',
-                    icon: hasQuery
-                        ? Icons.search_off_rounded
-                        : Icons.bookmark_outline,
-                  );
-                }
-                return GridView.builder(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    childAspectRatio: 0.52,
-                    crossAxisSpacing: 10,
-                    mainAxisSpacing: 14,
-                  ),
-                  itemCount: items.length,
-                  itemBuilder: (_, i) {
-                    final e = items[i];
-                    return BookCard(
-                      book: e.book,
-                      progress: e.lastChapterProgress,
-                      onTap: () => context.pushNamed(
-                        'detail',
-                        pathParameters: {'sourceId': e.book.sourceId, 'bookId': e.book.id},
-                        extra: e.book,
-                      ),
-                    );
+                // Pull-to-refresh fires LibrarySyncService.refresh() which
+                // pulls latest rows from Supabase + flushes any local
+                // writes that haven't been pushed yet. No-op if not signed
+                // in or Supabase is unreachable.
+                return RefreshIndicator(
+                  onRefresh: () async {
+                    try {
+                      await sl<LibrarySyncService>().refresh();
+                    } catch (_) {/* sync handles its own errors */}
                   },
+                  child: items.isEmpty
+                      ? _EmptyLibrary(
+                          hasQuery: state.query.trim().isNotEmpty,
+                          query: state.query,
+                        )
+                      : GridView.builder(
+                          // Always-scrollable physics so the gesture is
+                          // registered even when the grid fits in one
+                          // screen (otherwise short lists can't trigger
+                          // the refresh).
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding:
+                              const EdgeInsets.fromLTRB(12, 0, 12, 24),
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 3,
+                            childAspectRatio: 0.52,
+                            crossAxisSpacing: 10,
+                            mainAxisSpacing: 14,
+                          ),
+                          itemCount: items.length,
+                          itemBuilder: (_, i) {
+                            final e = items[i];
+                            final isReadingTab =
+                                state.tab == LibraryStatus.reading;
+                            final hasProgress = e.lastChapterProgress != null;
+                            return BookCard(
+                              book: e.book,
+                              progress: e.lastChapterProgress,
+                              subtitle: (isReadingTab && hasProgress)
+                                  ? 'Ch. ${e.lastChapterIndex + 1}'
+                                  : null,
+                              onTap: () => context.pushNamed(
+                                'detail',
+                                pathParameters: {
+                                  'sourceId': e.book.sourceId,
+                                  'bookId': e.book.id,
+                                },
+                                extra: e.book,
+                              ),
+                            );
+                          },
+                        ),
                 );
               },
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Empty / no-results state. Wrapped in a scrollable so a pull-to-refresh
+/// gesture still works when the library is empty (otherwise nothing in
+/// the viewport is draggable).
+class _EmptyLibrary extends StatelessWidget {
+  const _EmptyLibrary({required this.hasQuery, required this.query});
+
+  final bool hasQuery;
+  final String query;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, c) => SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: c.maxHeight),
+          child: EmptyView(
+            message: hasQuery
+                ? "No matches for '${query.trim()}'"
+                : 'No saved books yet',
+            icon: hasQuery ? Icons.search_off_rounded : Icons.bookmark_outline,
+          ),
+        ),
       ),
     );
   }

@@ -1,15 +1,20 @@
+import 'dart:async';
+
+import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'core/app_bootstrap.dart';
 import 'core/di/injection.dart';
-import 'core/router/app_router.dart';
+import 'core/router/app_router.dart' show buildRouter, parseSozoReadDeepLink;
+import 'core/services/chapter_check_service.dart';
 import 'core/state/theme_cubit.dart';
 import 'core/theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 200 * 1024 * 1024;
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,
@@ -32,9 +37,114 @@ class SozoReadApp extends StatefulWidget {
   State<SozoReadApp> createState() => _SozoReadAppState();
 }
 
-class _SozoReadAppState extends State<SozoReadApp> {
+class _SozoReadAppState extends State<SozoReadApp> with WidgetsBindingObserver {
   // Build the router once so route state survives theme rebuilds.
   late final _router = buildRouter();
+
+  // Throttle so re-foregrounding the app doesn't hammer the chapter
+  // sources. 30 minutes is enough to catch updates without being annoying.
+  DateTime? _lastChapterCheckAt;
+  static const _chapterCheckCooldown = Duration(minutes: 30);
+
+  // Cold + warm start sozoread:// deep-link routing. `app_links` is the
+  // only way to reliably capture deep links on modern Flutter — the
+  // PlatformDispatcher.defaultRouteName approach is unreliable when other
+  // plugins also bind to the same intent action.
+  final AppLinks _appLinks = AppLinks();
+  StreamSubscription<Uri>? _deepLinkSub;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Fire once at cold-start (after the first frame so the UI isn't
+    // blocked) — covers the "user just installed and saved a manga"
+    // path before any backgrounding has happened.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybeCheckNewChapters();
+      _initDeepLinks();
+    });
+  }
+
+  @override
+  void dispose() {
+    _deepLinkSub?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  Future<void> _initDeepLinks() async {
+    // Cold-start: the URI that launched the app (if any).
+    try {
+      final initial = await _appLinks.getInitialLink();
+      if (initial != null) {
+        debugPrint('[deeplink] cold-start uri: $initial');
+        _routeFromUri(initial);
+      }
+    } catch (e) {
+      debugPrint('[deeplink] getInitialLink failed: $e');
+    }
+    // Warm-start: every subsequent sozoread:// fired while the app is
+    // running (foreground or background → resumed) lands here.
+    _deepLinkSub = _appLinks.uriLinkStream.listen(
+      (uri) {
+        debugPrint('[deeplink] warm uri: $uri');
+        _routeFromUri(uri);
+      },
+      onError: (Object e) => debugPrint('[deeplink] stream error: $e'),
+    );
+  }
+
+  void _routeFromUri(Uri uri) {
+    final target = parseSozoReadDeepLink(uri);
+    if (target == null) {
+      debugPrint('[deeplink] no route for $uri');
+      return;
+    }
+    debugPrint('[deeplink] routing to $target');
+    _router.go(target);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _maybeCheckNewChapters();
+    }
+    super.didChangeAppLifecycleState(state);
+  }
+
+  /// Polls every saved book's source for new chapters and fires a
+  /// notification on growth. Throttled to once per [_chapterCheckCooldown]
+  /// so a user toggling between apps doesn't trigger N network calls.
+  /// Fire-and-forget — runs in the background, no UI block.
+  void _maybeCheckNewChapters() {
+    final now = DateTime.now();
+    if (_lastChapterCheckAt != null &&
+        now.difference(_lastChapterCheckAt!) < _chapterCheckCooldown) {
+      return;
+    }
+    _lastChapterCheckAt = now;
+    // ignore: unawaited_futures
+    sl<ChapterCheckService>().checkAllForNewChapters();
+  }
+
+  /// Foreground deep-link delivery. When the OS routes a sozoread:// URI to
+  /// an already-running app, Flutter calls this with the URI's components.
+  @override
+  Future<bool> didPushRouteInformation(RouteInformation routeInformation) async {
+    final raw = routeInformation.uri.toString();
+    String? target;
+    if (raw.startsWith('sozoread://')) {
+      target = parseSozoReadDeepLink(routeInformation.uri);
+    } else if (raw.startsWith('/manga/') || raw.startsWith('/chapter/')) {
+      target = raw;
+    }
+    if (target != null) {
+      _router.go(target);
+      return true;
+    }
+    return super.didPushRouteInformation(routeInformation);
+  }
 
   @override
   Widget build(BuildContext context) {

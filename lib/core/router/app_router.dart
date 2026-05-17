@@ -1,30 +1,98 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:hive/hive.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../features/auth/screens/auth_screen.dart';
 import '../../features/detail/screens/detail_screen.dart';
+import '../../features/downloads/screens/downloads_screen.dart';
 import '../../features/genre_browse/screens/genre_browse_screen.dart';
+import '../../features/history/screens/history_screen.dart';
 import '../../features/home/screens/home_screen.dart';
 import '../../features/library/screens/library_screen.dart';
 import '../../features/onboarding/screens/onboarding_screen.dart';
+import '../../features/profile/screens/profile_screen.dart';
 import '../../features/reader/manga_reader/screens/manga_reader_screen.dart';
 import '../../features/reader/novel_reader/screens/novel_reader_screen.dart';
 import '../../features/search/screens/search_screen.dart';
+import '../../features/settings/screens/about_settings_screen.dart';
+import '../../features/settings/screens/appearance_settings_screen.dart';
+import '../../features/settings/screens/developers_settings_screen.dart';
+import '../../features/settings/screens/reading_settings_screen.dart';
 import '../../features/settings/screens/settings_screen.dart';
+import '../../features/settings/screens/storage_settings_screen.dart';
 import '../../features/sources/screens/sources_screen.dart';
+import '../../features/splash/screens/splash_screen.dart';
 import '../models/book_detail.dart';
 import '../models/book_item.dart';
 import '../theme/app_colors.dart';
 
+/// Holds the most recent router instance so platform deep-link callbacks
+/// (delivered through `WidgetsBindingObserver.didPushRouteInformation`) can
+/// forward routes without dragging a `BuildContext` through `main.dart`.
+GoRouter? _routerRef;
+GoRouter? get appRouter => _routerRef;
+
+/// Parses a `sozoread://` URI into an in-app path that go_router understands,
+/// or returns `null` if the URI shouldn't be handled by this app.
+///
+/// Supported:
+///   `sozoread://manga/{sourceId}/{bookId}?url={encoded}`
+///   `sozoread://chapter/{sourceId}/{bookId}/{chapterIndex}?bookUrl={encoded}`
+String? parseSozoReadDeepLink(Uri uri) {
+  if (uri.scheme != 'sozoread') return null;
+  // On iOS the host is the first path segment (`manga`/`chapter`); on Android
+  // it sometimes lands in `uri.host`. Normalise.
+  final segments = <String>[
+    if (uri.host.isNotEmpty) uri.host,
+    ...uri.pathSegments.where((s) => s.isNotEmpty),
+  ];
+  if (segments.isEmpty) return null;
+  final kind = segments.first;
+  if (kind == 'login-callback') {
+    // Forward the full URI (incl. fragment / query) as the `link` param so the
+    // callback route can hand it to `getSessionFromUrl`.
+    return Uri(
+      path: '/login-callback',
+      queryParameters: {'link': uri.toString()},
+    ).toString();
+  }
+  if (kind == 'manga' && segments.length >= 3) {
+    final sourceId = Uri.encodeComponent(segments[1]);
+    final bookId = Uri.encodeComponent(segments[2]);
+    final url = uri.queryParameters['url'] ?? '';
+    return Uri(
+      path: '/manga/$sourceId/$bookId',
+      queryParameters: url.isEmpty ? null : {'url': url},
+    ).toString();
+  }
+  if (kind == 'chapter' && segments.length >= 4) {
+    final sourceId = Uri.encodeComponent(segments[1]);
+    final bookId = Uri.encodeComponent(segments[2]);
+    final chapterIndex = Uri.encodeComponent(segments[3]);
+    final bookUrl = uri.queryParameters['bookUrl'] ?? '';
+    return Uri(
+      path: '/chapter/$sourceId/$bookId/$chapterIndex',
+      queryParameters: bookUrl.isEmpty ? null : {'bookUrl': bookUrl},
+    ).toString();
+  }
+  return null;
+}
+
 GoRouter buildRouter() {
-  // First-run gate: if the user hasn't completed onboarding yet, land on
-  // /onboarding instead of /home. The `settings` box is opened during
-  // AppBootstrap.initialize, so this read is always safe.
-  final onboarded = Hive.box('settings').get('onboarded') == true;
-  final initial = onboarded ? '/home' : '/onboarding';
-  return GoRouter(
+  // Cold-start deep link: Flutter exposes the launch URL on
+  // `PlatformDispatcher.defaultRouteName`. If the OS handed us a sozoread://
+  // URI it will already be normalised to a path-only form here.
+  final initial = _resolveInitialLocation();
+  final router = GoRouter(
     initialLocation: initial,
     routes: [
+      GoRoute(
+        path: '/splash',
+        name: 'splash',
+        builder: (_, _) => const SplashScreen(),
+      ),
       // Bottom-nav shell. IndexedStack keeps each tab's widget mounted so the
       // home BLoC doesn't refetch when the user toggles between tabs.
       StatefulShellRoute.indexedStack(
@@ -74,6 +142,57 @@ GoRouter buildRouter() {
         path: '/sources',
         name: 'sources',
         builder: (_, _) => const SourcesScreen(),
+      ),
+      GoRoute(
+        path: '/history',
+        name: 'history',
+        builder: (_, _) => const HistoryScreen(),
+      ),
+      GoRoute(
+        path: '/downloads',
+        name: 'downloads',
+        builder: (_, _) => const DownloadsScreen(),
+      ),
+      GoRoute(
+        path: '/auth',
+        name: 'auth',
+        builder: (_, state) {
+          final mode = state.uri.queryParameters['mode'];
+          return AuthScreen(
+            initialMode:
+                mode == 'signup' ? AuthMode.signUp : AuthMode.signIn,
+          );
+        },
+      ),
+      GoRoute(
+        path: '/profile',
+        name: 'profile',
+        builder: (_, _) => const ProfileScreen(),
+      ),
+      GoRoute(
+        path: '/settings/appearance',
+        name: 'settings-appearance',
+        builder: (_, _) => const AppearanceSettingsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/reading',
+        name: 'settings-reading',
+        builder: (_, _) => const ReadingSettingsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/storage',
+        name: 'settings-storage',
+        builder: (_, _) => const StorageSettingsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/developers',
+        name: 'settings-developers',
+        builder: (_, _) => const DevelopersSettingsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/about',
+        name: 'settings-about',
+        builder: (_, _) => const AboutSettingsScreen(),
       ),
       GoRoute(
         path: '/detail/:sourceId/:bookId',
@@ -129,8 +248,72 @@ GoRouter buildRouter() {
           );
         },
       ),
+
+      // Supabase magic-link return URL — `sozoread://login-callback`.
+      // Consumes the OTP from the URL fragment and routes the user home.
+      GoRoute(
+        path: '/login-callback',
+        name: 'login-callback',
+        builder: (_, state) {
+          final encoded = state.uri.queryParameters['link'] ?? '';
+          return _LoginCallbackScreen(rawLink: encoded);
+        },
+      ),
+
+      // Deep-link entry points (sozoread://). The path-only forms here are
+      // what `parseSozoReadDeepLink` rewrites to. Both routes ultimately land
+      // the user on the detail screen — the reader is reached by the user
+      // tapping the desired chapter after the detail loads.
+      GoRoute(
+        path: '/manga/:sourceId/:bookId',
+        name: 'deep-manga',
+        builder: (_, state) {
+          final encoded = state.uri.queryParameters['url'] ?? '';
+          final url = encoded.isEmpty ? '' : Uri.decodeComponent(encoded);
+          return DetailScreen(
+            sourceId: state.pathParameters['sourceId']!,
+            url: url,
+            placeholder: null,
+          );
+        },
+      ),
+      GoRoute(
+        path: '/chapter/:sourceId/:bookId/:chapterIndex',
+        name: 'deep-chapter',
+        // MVP: just open detail. Chapter pre-jump is a follow-up — opening
+        // the reader needs the BookDetail object which is only resolvable
+        // after the detail load completes.
+        redirect: (_, state) {
+          final src = state.pathParameters['sourceId']!;
+          final book = state.pathParameters['bookId']!;
+          final bookUrl = state.uri.queryParameters['bookUrl'];
+          final q = bookUrl == null || bookUrl.isEmpty
+              ? ''
+              : '?url=${Uri.encodeQueryComponent(bookUrl)}';
+          return '/manga/$src/$book$q';
+        },
+      ),
     ],
   );
+  _routerRef = router;
+  return router;
+}
+
+String _resolveInitialLocation() {
+  const fallback = '/splash';
+  final raw = ui.PlatformDispatcher.instance.defaultRouteName;
+  if (raw.isEmpty || raw == '/') return fallback;
+  // The launcher may hand us a full sozoread:// URI on cold start.
+  if (raw.startsWith('sozoread://')) {
+    return parseSozoReadDeepLink(Uri.parse(raw)) ?? fallback;
+  }
+  // Or it may be a normalised path that already matches our deep-link routes.
+  if (raw.startsWith('/manga/') ||
+      raw.startsWith('/chapter/') ||
+      raw.startsWith('/login-callback')) {
+    return raw;
+  }
+  return fallback;
 }
 
 class _ShellScaffold extends StatelessWidget {
@@ -160,6 +343,68 @@ class _ShellScaffold extends StatelessWidget {
           for (final t in _tabs)
             BottomNavigationBarItem(icon: Icon(t.$1), label: t.$2),
         ],
+      ),
+    );
+  }
+}
+
+/// Handles the redirect from a Supabase magic-link email. The OTP arrives in
+/// the URL fragment; we hand the full URI to `getSessionFromUrl` which
+/// completes the session, then bounce the user to `/home`.
+class _LoginCallbackScreen extends StatefulWidget {
+  const _LoginCallbackScreen({required this.rawLink});
+  final String rawLink;
+
+  @override
+  State<_LoginCallbackScreen> createState() => _LoginCallbackScreenState();
+}
+
+class _LoginCallbackScreenState extends State<_LoginCallbackScreen> {
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _consume();
+  }
+
+  Future<void> _consume() async {
+    try {
+      final raw = widget.rawLink.isEmpty
+          ? Uri.base
+          : Uri.parse(Uri.decodeComponent(widget.rawLink));
+      await Supabase.instance.client.auth.getSessionFromUrl(raw);
+      if (!mounted) return;
+      context.go('/home');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: _error == null
+            ? const CircularProgressIndicator()
+            : Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.error_outline, size: 48),
+                    const SizedBox(height: 12),
+                    Text('Sign-in failed:\n$_error',
+                        textAlign: TextAlign.center),
+                    const SizedBox(height: 16),
+                    TextButton(
+                      onPressed: () => context.go('/home'),
+                      child: const Text('Continue'),
+                    ),
+                  ],
+                ),
+              ),
       ),
     );
   }

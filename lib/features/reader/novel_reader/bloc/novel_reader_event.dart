@@ -36,3 +36,7 @@ class NovelReaderProgressUpdated extends NovelReaderEvent {
   @override
   List<Object?> get props => [progress];
 }
+
+class NovelReaderResumeConsumed extends NovelReaderEvent {
+  const NovelReaderResumeConsumed();
+}

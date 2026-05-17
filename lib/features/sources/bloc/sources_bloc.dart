@@ -1,5 +1,6 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../../core/provider/provider_manager.dart';
 import '../../../core/provider/provider_registry.dart';
 import '../../../core/repository/provider_repository.dart';
 import 'sources_event.dart';
@@ -17,6 +18,7 @@ class SourcesBloc extends Bloc<SourcesEvent, SourcesState> {
     on<SourceInstalled>(_onInstalled);
     on<SourceUninstalled>(_onUninstalled);
     on<SourceUpdated>(_onUpdated);
+    on<SourceHealthReset>(_onHealthReset);
   }
 
   final ProviderRegistry _registry;
@@ -31,12 +33,24 @@ class SourcesBloc extends Bloc<SourcesEvent, SourcesState> {
     final items = <SourceItem>[];
     for (final e in entries) {
       final loaded = _repo.provider(e.name) != null;
-      var item = SourceItem(name: e.name, url: e.url, loaded: loaded);
+      final provider = _repo.provider(e.name);
+      var item = SourceItem(
+        name: e.name,
+        url: e.url,
+        loaded: loaded,
+        health: provider?.healthStatus ?? ProviderHealthStatus.healthy,
+        healthError: provider?.lastError,
+      );
       if (loaded) {
         final info = await _repo.info(e.name);
         info.fold(
           (f) => item = item.copyWith(error: f.message),
           (i) => item = item.copyWith(info: i),
+        );
+        // info() may have flipped health; refresh.
+        item = item.copyWith(
+          health: provider?.healthStatus ?? ProviderHealthStatus.healthy,
+          healthError: provider?.lastError,
         );
       }
       items.add(item);
@@ -60,6 +74,12 @@ class SourcesBloc extends Bloc<SourcesEvent, SourcesState> {
 
   Future<void> _onUpdated(SourceUpdated event, Emitter<SourcesState> emit) async {
     await _repo.refresh(event.name);
+    await _load(emit);
+  }
+
+  Future<void> _onHealthReset(
+      SourceHealthReset event, Emitter<SourcesState> emit) async {
+    _repo.provider(event.name)?.resetHealth();
     await _load(emit);
   }
 }

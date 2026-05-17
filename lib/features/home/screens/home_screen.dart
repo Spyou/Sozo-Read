@@ -7,8 +7,6 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/di/injection.dart';
 import '../../../core/models/book_item.dart';
-import '../../../core/repository/library_repository.dart';
-import '../../../core/repository/provider_repository.dart';
 import '../../../core/state/active_source_cubit.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/source_picker.dart';
@@ -27,25 +25,27 @@ class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final activeCubit = sl<ActiveSourceCubit>();
-    return BlocProvider(
-      create: (_) {
-        final bloc = HomeBloc(
-          repository: sl<ProviderRepository>(),
-          libraryRepository: sl<LibraryRepository>(),
-        );
-        // Sync home with the active source. Re-emits HomeSourceChanged whenever
-        // the user picks a different source in Settings.
-        activeCubit.initializeIfNeeded();
-        final src = activeCubit.state;
-        if (src != null) bloc.add(HomeSourceChanged(src));
-        return bloc;
-      },
+    // HomeBloc is a singleton — the splash screen has typically already
+    // dispatched HomeSourceChanged by the time we get here, so sections may
+    // already be loaded when this widget mounts (no second spinner).
+    return BlocProvider.value(
+      value: sl<HomeBloc>(),
       child: BlocListener<ActiveSourceCubit, String?>(
         bloc: activeCubit,
         listener: (ctx, src) {
           if (src != null) ctx.read<HomeBloc>().add(HomeSourceChanged(src));
         },
-        child: const _HomeView(),
+        child: Builder(builder: (ctx) {
+          // If splash skipped (e.g. hot-restart lands directly on /home) and
+          // no source has been pushed yet, kick the bloc off now.
+          final bloc = ctx.read<HomeBloc>();
+          activeCubit.initializeIfNeeded();
+          final src = activeCubit.state;
+          if (src != null && bloc.state.sourceId == null) {
+            bloc.add(HomeSourceChanged(src));
+          }
+          return const _HomeView();
+        }),
       ),
     );
   }

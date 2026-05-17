@@ -9,6 +9,7 @@ import '../../../../core/repository/provider_repository.dart';
 import '../../../../core/state/novel_prefs_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/state_views.dart';
+import '../../widgets/reading_bg_picker_sheet.dart';
 import '../bloc/novel_reader_bloc.dart';
 import '../bloc/novel_reader_event.dart';
 import '../bloc/novel_reader_state.dart';
@@ -48,36 +49,90 @@ class _NovelViewState extends State<_NovelView> {
     super.dispose();
   }
 
+  Future<void> _openSettings(BuildContext context) async {
+    final prefsCubit = context.read<NovelPrefsCubit>();
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return BlocProvider.value(
+          value: prefsCubit,
+          child: const _NovelSettingsSheet(),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final bgMode = context.watch<NovelPrefsCubit>().state.backgroundMode;
+    final bg = ReadingBg.backgroundFor(bgMode, context) ??
+        theme.scaffoldBackgroundColor;
+    final fg = ReadingBg.textFor(bgMode, context);
+
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
+      backgroundColor: bg,
       appBar: AppBar(
-        backgroundColor: theme.scaffoldBackgroundColor,
-        leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => context.pop()),
+        backgroundColor: bg,
+        foregroundColor: fg,
+        leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            color: fg,
+            onPressed: () => context.pop()),
         title: BlocBuilder<NovelReaderBloc, NovelReaderState>(
           builder: (_, s) => Text(
             s.book?.title ?? 'Reading',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: fg),
           ),
         ),
         actions: [
           IconButton(
             icon: const Icon(Icons.text_decrease),
+            color: fg,
             onPressed: () => context.read<NovelPrefsCubit>().bumpFontSize(-1),
           ),
           IconButton(
             icon: const Icon(Icons.text_increase),
+            color: fg,
             onPressed: () => context.read<NovelPrefsCubit>().bumpFontSize(1),
+          ),
+          IconButton(
+            icon: const Icon(Icons.tune_rounded),
+            color: fg,
+            tooltip: 'Reader settings',
+            onPressed: () => _openSettings(context),
           ),
         ],
       ),
       body: BlocConsumer<NovelReaderBloc, NovelReaderState>(
-        listenWhen: (a, b) => a.chapterIndex != b.chapterIndex,
-        listener: (_, _) {
-          if (_scroll.hasClients) _scroll.jumpTo(0);
+        listenWhen: (a, b) =>
+            a.chapterIndex != b.chapterIndex ||
+            a.status != b.status ||
+            a.pendingResumeProgress != b.pendingResumeProgress,
+        listener: (ctx, state) {
+          if (state.status == NovelReaderStatus.loading) {
+            if (_scroll.hasClients) _scroll.jumpTo(0);
+          }
+          if (state.status == NovelReaderStatus.success &&
+              state.pendingResumeProgress != null) {
+            final frac = state.pendingResumeProgress!.clamp(0.0, 1.0);
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              if (_scroll.hasClients) {
+                final max = _scroll.position.maxScrollExtent;
+                if (max > 0) {
+                  _scroll.jumpTo(max * frac);
+                }
+              }
+              ctx
+                  .read<NovelReaderBloc>()
+                  .add(const NovelReaderResumeConsumed());
+            });
+          }
         },
         builder: (context, state) {
           if (state.status == NovelReaderStatus.loading) return const LoadingView();
@@ -123,7 +178,8 @@ class _NovelViewState extends State<_NovelView> {
                               Padding(
                                 padding: const EdgeInsets.only(bottom: 12),
                                 child: Text(chapter.title,
-                                    style: theme.textTheme.headlineSmall),
+                                    style: theme.textTheme.headlineSmall
+                                        ?.copyWith(color: fg)),
                               ),
                             SelectableText(
                               state.text,
@@ -132,8 +188,7 @@ class _NovelViewState extends State<_NovelView> {
                                 height: prefs.lineHeight,
                                 fontFamily: NovelPrefsCubit.resolveFamily(
                                     prefs.fontFamily),
-                                color: theme.textTheme.bodyLarge?.color ??
-                                    AppColors.textPrimary,
+                                color: fg,
                               ),
                             ),
                           ],
@@ -143,7 +198,7 @@ class _NovelViewState extends State<_NovelView> {
                   ),
                 ),
               ),
-              _NovelNavBar(state: state),
+              _NovelNavBar(state: state, bg: bg, fg: fg),
             ],
           );
         },
@@ -153,8 +208,10 @@ class _NovelViewState extends State<_NovelView> {
 }
 
 class _NovelNavBar extends StatelessWidget {
-  const _NovelNavBar({required this.state});
+  const _NovelNavBar({required this.state, required this.bg, required this.fg});
   final NovelReaderState state;
+  final Color bg;
+  final Color fg;
 
   @override
   Widget build(BuildContext context) {
@@ -167,13 +224,16 @@ class _NovelNavBar extends StatelessWidget {
     return SafeArea(
       top: false,
       child: Container(
+        color: bg,
         decoration: BoxDecoration(
+          color: bg,
           border: Border(top: BorderSide(color: theme.dividerColor)),
         ),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: Row(
           children: [
             TextButton.icon(
+              style: TextButton.styleFrom(foregroundColor: fg),
               onPressed: canPrev
                   ? () => context
                       .read<NovelReaderBloc>()
@@ -191,6 +251,7 @@ class _NovelNavBar extends StatelessWidget {
               ),
             ),
             TextButton.icon(
+              style: TextButton.styleFrom(foregroundColor: fg),
               onPressed: canNext
                   ? () => context
                       .read<NovelReaderBloc>()
@@ -200,6 +261,89 @@ class _NovelNavBar extends StatelessWidget {
               label: const Text('Next'),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NovelSettingsSheet extends StatelessWidget {
+  const _NovelSettingsSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 18),
+          child: BlocBuilder<NovelPrefsCubit, NovelPrefs>(
+            builder: (context, prefs) {
+              final cubit = context.read<NovelPrefsCubit>();
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: AppColors.textTertiary.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  const Text('Background',
+                      style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      )),
+                  const SizedBox(height: 8),
+                  ReadingBgPicker(
+                    value: prefs.backgroundMode,
+                    onChanged: cubit.setBackgroundMode,
+                  ),
+                  const SizedBox(height: 18),
+                  const Text('Font size',
+                      style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      )),
+                  Slider(
+                    value: prefs.fontSize.clamp(12.0, 28.0),
+                    min: 12,
+                    max: 28,
+                    divisions: 16,
+                    label: prefs.fontSize.toStringAsFixed(0),
+                    onChanged: cubit.setFontSize,
+                  ),
+                  const SizedBox(height: 4),
+                  const Text('Line height',
+                      style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      )),
+                  Slider(
+                    value: prefs.lineHeight.clamp(1.2, 2.2),
+                    min: 1.2,
+                    max: 2.2,
+                    divisions: 10,
+                    label: prefs.lineHeight.toStringAsFixed(2),
+                    onChanged: cubit.setLineHeight,
+                  ),
+                ],
+              );
+            },
+          ),
         ),
       ),
     );

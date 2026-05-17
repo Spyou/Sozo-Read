@@ -1,8 +1,28 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- INTERNET is required for ALL builds. Flutter's tooling only
+         injects this permission into the DEBUG manifest (so hot reload
+         works); release builds need it declared explicitly here or
+         every network call silently fails with "Failed host lookup". -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- image_picker camera capture. Gallery uses the system Photo Picker
+         on Android 13+ which requires no permission. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <!-- New-chapter local notifications. POST_NOTIFICATIONS is required
+         on Android 13+ (runtime prompt); RECEIVE_BOOT_COMPLETED lets
+         Workmanager re-schedule the periodic task after a reboot so
+         users don't have to open the app to "rearm" alerts. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <application
         android:label="Sozo Read"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher_red"
+        android:roundIcon="@mipmap/ic_launcher_red">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -20,11 +40,88 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- The MAIN/LAUNCHER intent-filter lives directly on the
+                 activity rather than on an activity-alias because
+                 Flutter's `application_package.dart` launcher-detection
+                 only walks <activity> elements (findAllElements('activity')
+                 excludes <activity-alias>). The colored aliases below are
+                 retained — disabled — so flutter_dynamic_icon can still
+                 toggle them in the future without touching the manifest. -->
             <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Deep-link handler for sozoread://. Lives on the main
+                 activity so the OS always has a single resolver target
+                 even when the user has swapped to a different color alias. -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="sozoread" />
             </intent-filter>
         </activity>
+
+        <!-- Alternate launcher icons retained for flutter_dynamic_icon
+             support but disabled by default — the picker UI is hidden in
+             this build. Enabling one of these via FlutterDynamicIcon
+             swaps the home-screen icon. -->
+        <activity-alias
+            android:name="com.spyou.sozo_manga.MainActivityRed"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_red"
+            android:roundIcon="@mipmap/ic_launcher_red"
+            android:label="Sozo Read"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name="com.spyou.sozo_manga.MainActivityBlue"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_blue"
+            android:roundIcon="@mipmap/ic_launcher_blue"
+            android:label="Sozo Read"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name="com.spyou.sozo_manga.MainActivityGreen"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_green"
+            android:roundIcon="@mipmap/ic_launcher_green"
+            android:label="Sozo Read"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name="com.spyou.sozo_manga.MainActivityPurple"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_purple"
+            android:roundIcon="@mipmap/ic_launcher_purple"
+            android:label="Sozo Read"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
@@ -40,6 +137,13 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Lets url_launcher resolve https links (Developers page →
+             GitHub / Telegram). Required on Android 11+ since package
+             visibility was restricted. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
         </intent>
     </queries>
 </manifest>

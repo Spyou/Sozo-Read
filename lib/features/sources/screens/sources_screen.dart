@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../core/di/injection.dart';
+import '../../../core/provider/provider_manager.dart';
 import '../../../core/provider/provider_registry.dart';
 import '../../../core/repository/provider_repository.dart';
 import '../../../core/theme/app_colors.dart';
@@ -129,13 +130,27 @@ class _SourceTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
       ),
       child: ListTile(
-        title: Text(item.info?.name ?? item.name),
+        title: Row(
+          children: [
+            Flexible(child: Text(item.info?.name ?? item.name, overflow: TextOverflow.ellipsis)),
+            if (item.health != ProviderHealthStatus.healthy) ...[
+              const SizedBox(width: 8),
+              _HealthPill(status: item.health),
+            ],
+          ],
+        ),
         subtitle: Text(
-          subtitle,
+          item.health != ProviderHealthStatus.healthy && item.healthError != null
+              ? item.healthError!
+              : subtitle,
           style: TextStyle(
-            color: item.error != null ? AppColors.error : AppColors.textSecondary,
+            color: (item.error != null || item.health == ProviderHealthStatus.broken)
+                ? AppColors.error
+                : AppColors.textSecondary,
             fontSize: 12,
           ),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
         ),
         trailing: PopupMenuButton<String>(
           icon: const Icon(Icons.more_vert),
@@ -144,11 +159,43 @@ class _SourceTile extends StatelessWidget {
             final bloc = context.read<SourcesBloc>();
             if (v == 'update') bloc.add(SourceUpdated(item.name));
             if (v == 'remove') bloc.add(SourceUninstalled(item.name));
+            if (v == 'reset') bloc.add(SourceHealthReset(item.name));
           },
-          itemBuilder: (_) => const [
-            PopupMenuItem(value: 'update', child: Text('Update')),
-            PopupMenuItem(value: 'remove', child: Text('Remove')),
+          itemBuilder: (_) => [
+            const PopupMenuItem(value: 'update', child: Text('Update')),
+            const PopupMenuItem(value: 'remove', child: Text('Remove')),
+            if (item.health != ProviderHealthStatus.healthy)
+              const PopupMenuItem(value: 'reset', child: Text('Reset')),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HealthPill extends StatelessWidget {
+  const _HealthPill({required this.status});
+  final ProviderHealthStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final isBroken = status == ProviderHealthStatus.broken;
+    final color = isBroken ? AppColors.error : Colors.amber;
+    final label = isBroken ? 'BROKEN' : 'DEGRADED';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color, width: 1),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.5,
         ),
       ),
     );

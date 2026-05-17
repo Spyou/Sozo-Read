@@ -1,7 +1,9 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../../../core/di/injection.dart';
 import '../../../../core/repository/library_repository.dart';
 import '../../../../core/repository/provider_repository.dart';
+import '../../../../core/repository/read_chapters_repository.dart';
 import 'novel_reader_event.dart';
 import 'novel_reader_state.dart';
 
@@ -16,20 +18,32 @@ class NovelReaderBloc extends Bloc<NovelReaderEvent, NovelReaderState> {
     on<NovelReaderChapterChanged>(_onChapterChanged);
     on<NovelReaderFontSizeChanged>(_onFontSize);
     on<NovelReaderProgressUpdated>(_onProgress);
+    on<NovelReaderResumeConsumed>(_onResumeConsumed);
   }
 
   final ProviderRepository _provider;
   final LibraryRepository _library;
 
+  /// Guard so paging past 99% only writes the read mark once per chapter.
+  String? _lastMarkedChapterKey;
+
   Future<void> _onStarted(NovelReaderStarted event, Emitter<NovelReaderState> emit) async {
     emit(state.copyWith(book: event.book, chapterIndex: event.chapterIndex, progress: 0));
-    await _fetch(emit);
+    final entry = _library.get(event.book.sourceId, event.book.id);
+    final resume = (entry != null &&
+            entry.lastChapterIndex == event.chapterIndex &&
+            (entry.lastChapterProgress ?? 0) > 0 &&
+            (entry.lastChapterProgress ?? 0) < 1)
+        ? entry.lastChapterProgress
+        : null;
+    await _fetch(emit, pendingResume: resume);
   }
 
   Future<void> _onChapterChanged(NovelReaderChapterChanged event, Emitter<NovelReaderState> emit) async {
     if (state.book == null) return;
     final i = event.chapterIndex.clamp(0, state.book!.chapters.length - 1);
-    emit(state.copyWith(chapterIndex: i, progress: 0));
+    _lastMarkedChapterKey = null;
+    emit(state.copyWith(chapterIndex: i, progress: 0, clearResume: true));
     await _fetch(emit);
   }
 
@@ -48,9 +62,29 @@ class NovelReaderBloc extends Bloc<NovelReaderEvent, NovelReaderState> {
       chapterIndex: state.chapterIndex,
       chapterProgress: event.progress,
     );
+    // Mark chapter as read once the user scrolls past 99% of the content.
+    if (event.progress >= 0.99 &&
+        state.chapterIndex >= 0 &&
+        state.chapterIndex < book.chapters.length) {
+      final ch = book.chapters[state.chapterIndex];
+      final key = '${book.sourceId}::${book.id}::${ch.id}';
+      if (_lastMarkedChapterKey != key) {
+        _lastMarkedChapterKey = key;
+        // ignore: discarded_futures
+        sl<ReadChaptersRepository>().mark(book.sourceId, book.id, ch.id);
+      }
+    }
   }
 
-  Future<void> _fetch(Emitter<NovelReaderState> emit) async {
+  void _onResumeConsumed(
+      NovelReaderResumeConsumed event, Emitter<NovelReaderState> emit) {
+    emit(state.copyWith(clearResume: true));
+  }
+
+  Future<void> _fetch(
+    Emitter<NovelReaderState> emit, {
+    double? pendingResume,
+  }) async {
     final book = state.book;
     if (book == null || book.chapters.isEmpty) return;
     emit(state.copyWith(status: NovelReaderStatus.loading, clearError: true, text: ''));
@@ -58,7 +92,11 @@ class NovelReaderBloc extends Bloc<NovelReaderEvent, NovelReaderState> {
     final result = await _provider.novelContent(book.sourceId, ch.url);
     result.fold(
       (f) => emit(state.copyWith(status: NovelReaderStatus.error, error: f.message)),
-      (c) => emit(state.copyWith(status: NovelReaderStatus.success, text: c.text)),
+      (c) => emit(state.copyWith(
+        status: NovelReaderStatus.success,
+        text: c.text,
+        pendingResumeProgress: pendingResume,
+      )),
     );
   }
 }

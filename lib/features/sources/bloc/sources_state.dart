@@ -1,6 +1,7 @@
 import 'package:equatable/equatable.dart';
 
 import '../../../core/models/provider_info.dart';
+import '../../../core/provider/provider_manager.dart';
 
 class SourceItem extends Equatable {
   final String name;
@@ -8,6 +9,8 @@ class SourceItem extends Equatable {
   final bool loaded;
   final ProviderInfo? info;
   final String? error;
+  final ProviderHealthStatus health;
+  final String? healthError;
 
   const SourceItem({
     required this.name,
@@ -15,19 +18,30 @@ class SourceItem extends Equatable {
     this.loaded = false,
     this.info,
     this.error,
+    this.health = ProviderHealthStatus.healthy,
+    this.healthError,
   });
 
-  SourceItem copyWith({bool? loaded, ProviderInfo? info, String? error, bool clearError = false}) =>
+  SourceItem copyWith({
+    bool? loaded,
+    ProviderInfo? info,
+    String? error,
+    bool clearError = false,
+    ProviderHealthStatus? health,
+    String? healthError,
+  }) =>
       SourceItem(
         name: name,
         url: url,
         loaded: loaded ?? this.loaded,
         info: info ?? this.info,
         error: clearError ? null : (error ?? this.error),
+        health: health ?? this.health,
+        healthError: healthError ?? this.healthError,
       );
 
   @override
-  List<Object?> get props => [name, url, loaded, info, error];
+  List<Object?> get props => [name, url, loaded, info, error, health, healthError];
 }
 
 enum SourcesStatus { initial, loading, ready }

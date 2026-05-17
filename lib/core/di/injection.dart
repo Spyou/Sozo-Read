@@ -1,14 +1,24 @@
 import 'package:dio/dio.dart';
 import 'package:get_it/get_it.dart';
 
+import '../../features/home/bloc/home_bloc.dart';
 import '../provider/provider_downloader.dart';
 import '../provider/provider_manager.dart';
 import '../provider/provider_registry.dart';
+import '../repository/downloads_repository.dart';
 import '../repository/library_repository.dart';
 import '../repository/provider_repository.dart';
+import '../repository/read_chapters_repository.dart';
+import '../services/chapter_check_service.dart';
+import '../services/cloudinary_service.dart';
+import '../services/notification_service.dart';
 import '../state/active_source_cubit.dart';
+import '../state/auth_service.dart';
+import '../state/manga_prefs_cubit.dart';
+import '../state/notifications_prefs_cubit.dart';
 import '../state/novel_prefs_cubit.dart';
 import '../state/theme_cubit.dart';
+import '../sync/library_sync_service.dart';
 
 final GetIt sl = GetIt.instance;
 
@@ -37,9 +47,42 @@ Future<void> configureDependencies() async {
     () => ProviderRepository(manager: sl(), registry: sl()),
   );
   sl.registerLazySingleton<LibraryRepository>(() => LibraryRepository());
+  sl.registerLazySingleton<ReadChaptersRepository>(
+    () => ReadChaptersRepository(),
+  );
+  sl.registerLazySingleton<DownloadsRepository>(() => DownloadsRepository());
   sl.registerLazySingleton<ActiveSourceCubit>(
     () => ActiveSourceCubit(repository: sl()),
   );
   sl.registerLazySingleton<ThemeCubit>(() => ThemeCubit());
   sl.registerLazySingleton<NovelPrefsCubit>(() => NovelPrefsCubit());
+  sl.registerLazySingleton<MangaPrefsCubit>(() => MangaPrefsCubit());
+  sl.registerLazySingleton<AuthService>(() => AuthService());
+  sl.registerLazySingleton<CloudinaryService>(
+    () => CloudinaryService(dio: sl()),
+  );
+  sl.registerLazySingleton<LibrarySyncService>(
+    () => LibrarySyncService(
+      library: sl(),
+      readChapters: sl(),
+      auth: sl(),
+    ),
+  );
+  sl.registerLazySingleton<NotificationsPrefsCubit>(
+    () => NotificationsPrefsCubit(),
+  );
+  sl.registerLazySingleton<NotificationService>(() => NotificationService());
+  sl.registerLazySingleton<ChapterCheckService>(
+    () => ChapterCheckService(
+      library: sl(),
+      providers: sl(),
+      notifications: sl(),
+    ),
+  );
+  // HomeBloc as a singleton so the splash screen can warm it up while its
+  // animation plays — by the time the user lands on /home, sections are
+  // already loaded (no second spinner).
+  sl.registerLazySingleton<HomeBloc>(
+    () => HomeBloc(repository: sl(), libraryRepository: sl()),
+  );
 }

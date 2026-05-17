@@ -15,6 +15,10 @@ class DetailState extends Equatable {
   final LibraryEntry? library;
   final SimilarStatus similarStatus;
   final List<BookItem> similar;
+  /// IDs of chapters the user has finished for the current book.
+  /// Populated on load and refreshed whenever the read_chapters Hive box
+  /// changes (e.g. via cloud sync).
+  final Set<String> readChapterIds;
 
   const DetailState({
     this.status = DetailStatus.initial,
@@ -23,6 +27,7 @@ class DetailState extends Equatable {
     this.library,
     this.similarStatus = SimilarStatus.idle,
     this.similar = const [],
+    this.readChapterIds = const {},
   });
 
   bool get inLibrary => library != null;
@@ -36,6 +41,7 @@ class DetailState extends Equatable {
     bool clearError = false,
     SimilarStatus? similarStatus,
     List<BookItem>? similar,
+    Set<String>? readChapterIds,
   }) =>
       DetailState(
         status: status ?? this.status,
@@ -44,8 +50,17 @@ class DetailState extends Equatable {
         library: clearLibrary ? null : (library ?? this.library),
         similarStatus: similarStatus ?? this.similarStatus,
         similar: similar ?? this.similar,
+        readChapterIds: readChapterIds ?? this.readChapterIds,
       );
 
   @override
-  List<Object?> get props => [status, book, error, library, similarStatus, similar];
+  List<Object?> get props => [
+        status,
+        book,
+        error,
+        library,
+        similarStatus,
+        similar,
+        readChapterIds,
+      ];
 }
