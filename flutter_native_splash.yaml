@@ -1,16 +1,17 @@
 # Sozo Read native splash configuration.
 # Run: dart run flutter_native_splash:create --path=flutter_native_splash.yaml
+#
+# The native splash is intentionally a pure black screen — the in-app Flutter
+# splash (NetflixSplash style) does the visible reveal. Keeping the native
+# stage blank avoids a logo flash between the OS-controlled splash and our
+# animated splash.
 flutter_native_splash:
   color: "#0A0A0A"
   color_dark: "#0A0A0A"
-  image: assets/branding/sozo_logo_red.png
-  image_dark: assets/branding/sozo_logo_red.png
 
   android_12:
     color: "#0A0A0A"
     color_dark: "#0A0A0A"
-    image: assets/branding/sozo_logo_red.png
-    image_dark: assets/branding/sozo_logo_red.png
     icon_background_color: "#0A0A0A"
     icon_background_color_dark: "#0A0A0A"
 

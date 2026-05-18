@@ -1,17 +1,28 @@
-# sozo_manga
+# Sozo Read
 
-A new Flutter project.
+Sozo Read is a manga and web novel reader that pulls content from multiple
+online sources through JavaScript modules — the catalog can grow as new
+sources are added without needing an app update.
 
-## Getting Started
+The manga reader supports both webtoon scroll and paged layouts, with
+left-to-right and right-to-left reading directions, two-page spreads in
+landscape, and auto-scroll for webtoons. Color filters, crop edges,
+image quality tiers, tap-zone navigation, double-tap zoom, and
+volume-key page turns are all built in, and long-pressing a panel lets
+you save it to your gallery or view it at full resolution.
 
-This project is a starting point for a Flutter application.
+The novel reader gives you adjustable typography, multiple reading
+backgrounds (white, sepia, black, system), and volume-key chapter
+navigation for one-handed reading.
 
-A few resources to get you started if this is your first Flutter project:
+Your library tracks every series with a reading status, and the Home
+screen surfaces the next unread chapter for each series you're following.
+New-chapter alerts fire when you open the app. Sign in with a magic link
+and your library, progress, and history sync across devices. Downloaded
+chapters keep working offline.
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+Sources available out of the box: MangaDex, Mangakakalot, Weeb Central,
+Mangapill, and Mangakatana for manga; FreeWebNovel and NovelBin for novels.
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+The app ships with selectable accent colors and matching launcher icons,
+an animated SOZO READ splash, and a full dark theme.

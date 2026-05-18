@@ -8,8 +8,10 @@ import '../../../core/theme/app_colors.dart';
 import '../../home/bloc/home_bloc.dart';
 import '../../home/bloc/home_event.dart';
 
-/// Animated splash. Plays for ~1.6s after the native splash ends, then routes
-/// the user to /onboarding (first run) or /home.
+/// Netflix-style text splash. "S" pops in, "OZO" sweeps out to its right,
+/// then " READ" sweeps further right — everything centered. Plays for 2.5s
+/// (excluding the OS-level native splash phase), then routes the user to
+/// `/onboarding` (first run) or `/home`.
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
   @override
@@ -20,64 +22,68 @@ class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
 
-  // Curves for the staged animation.
-  late final Animation<double> _logoScale;   // 0.6 → 1.0 elastic
-  late final Animation<double> _logoOpacity; // 0 → 1
-  late final Animation<double> _sozoSlide;   // 12 → 0 px, with fade
-  late final Animation<double> _sozoOpacity;
-  late final Animation<double> _readSlide;
+  // Snappy ease curve used for the scale + sweep reveals. Matches the
+  // reference's Cubic(0.19, 1.0, 0.22, 1.0) — an aggressive ease-out-quint.
+  static const _snappy = Cubic(0.19, 1.0, 0.22, 1.0);
+
+  late final Animation<double> _sScale;       // 0.04 → 1.0
+  late final Animation<double> _sOpacity;     // 0 → 1
+  late final Animation<double> _ozoWidth;     // 0 → 1 (ClipRect widthFactor)
+  late final Animation<double> _ozoOpacity;
+  late final Animation<double> _readWidth;    // 0 → 1
   late final Animation<double> _readOpacity;
-  late final Animation<double> _underline;   // 0 → 1 width fraction
-  late final Animation<double> _exitFade;    // 0 → 1 at the very end
+  late final Animation<double> _fadeOut;      // 1 → 0 at end
 
   @override
   void initState() {
     super.initState();
     _ctrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1800),
+      duration: const Duration(milliseconds: 2500),
     );
 
-    _logoOpacity = CurvedAnimation(
+    // S: scales from microscopic to full size, fading in faster than it grows.
+    _sOpacity = CurvedAnimation(
       parent: _ctrl,
-      curve: const Interval(0.0, 0.25, curve: Curves.easeOut),
+      curve: const Interval(0.00, 0.10, curve: Curves.easeIn),
     );
-    _logoScale = Tween(begin: 0.6, end: 1.0).animate(
+    _sScale = Tween<double>(begin: 0.04, end: 1.0).animate(
       CurvedAnimation(
         parent: _ctrl,
-        curve: const Interval(0.0, 0.40, curve: Curves.elasticOut),
+        curve: const Interval(0.00, 0.32, curve: _snappy),
       ),
     );
 
-    _sozoOpacity = CurvedAnimation(
+    // OZO: sweeps out to the right of S via ClipRect width factor.
+    _ozoOpacity = CurvedAnimation(
       parent: _ctrl,
-      curve: const Interval(0.25, 0.50, curve: Curves.easeOut),
+      curve: const Interval(0.28, 0.40, curve: Curves.easeIn),
     );
-    _sozoSlide = Tween(begin: 12.0, end: 0.0).animate(
+    _ozoWidth = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(
         parent: _ctrl,
-        curve: const Interval(0.25, 0.50, curve: Curves.easeOut),
+        curve: const Interval(0.28, 0.56, curve: _snappy),
       ),
     );
+
+    // READ: sweeps out further right after a brief beat.
     _readOpacity = CurvedAnimation(
       parent: _ctrl,
-      curve: const Interval(0.35, 0.60, curve: Curves.easeOut),
+      curve: const Interval(0.56, 0.68, curve: Curves.easeIn),
     );
-    _readSlide = Tween(begin: 12.0, end: 0.0).animate(
+    _readWidth = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(
         parent: _ctrl,
-        curve: const Interval(0.35, 0.60, curve: Curves.easeOut),
+        curve: const Interval(0.56, 0.84, curve: _snappy),
       ),
     );
 
-    _underline = CurvedAnimation(
-      parent: _ctrl,
-      curve: const Interval(0.55, 0.78, curve: Curves.easeOutCubic),
-    );
-
-    _exitFade = CurvedAnimation(
-      parent: _ctrl,
-      curve: const Interval(0.88, 1.0, curve: Curves.easeIn),
+    // Hold the full word for ~150ms, then fade everything to black.
+    _fadeOut = Tween<double>(begin: 1.0, end: 0.0).animate(
+      CurvedAnimation(
+        parent: _ctrl,
+        curve: const Interval(0.90, 1.00, curve: Curves.easeIn),
+      ),
     );
 
     _warmHome();
@@ -121,114 +127,58 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.primary;
+    // Scale the text down on narrow phones so "SOZO READ" never clips.
+    final screenW = MediaQuery.of(context).size.width;
+    final fontSize = (screenW * 0.14).clamp(42.0, 72.0);
+    final textStyle = TextStyle(
+      color: accent,
+      fontSize: fontSize,
+      fontWeight: FontWeight.w900,
+      letterSpacing: -3.0,
+      height: 1.0,
+    );
+
     return Scaffold(
       backgroundColor: AppColors.background,
       body: AnimatedBuilder(
         animation: _ctrl,
         builder: (context, _) {
           return Opacity(
-            opacity: 1 - _exitFade.value,
+            opacity: _fadeOut.value,
             child: Center(
-              child: Column(
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  // Logo image
+                  // S — scales from a dot to full size.
                   Opacity(
-                    opacity: _logoOpacity.value,
+                    opacity: _sOpacity.value,
                     child: Transform.scale(
-                      scale: _logoScale.value,
-                      child: Container(
-                        width: 132,
-                        height: 132,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(28),
-                          boxShadow: [
-                            BoxShadow(
-                              color: accent.withValues(alpha: 0.32),
-                              blurRadius: 48,
-                              spreadRadius: -8,
-                            ),
-                          ],
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(28),
-                          child: Image.asset(
-                            // Force the default red logo; icon-variant feature
-                            // is currently disabled in Settings.
-                            'assets/branding/sozo_logo_red.png',
-                            fit: BoxFit.cover,
-                          ),
-                        ),
+                      scale: _sScale.value,
+                      alignment: Alignment.center,
+                      child: Text('S', style: textStyle),
+                    ),
+                  ),
+                  // OZO — width-clipped reveal left-to-right.
+                  ClipRect(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      widthFactor: _ozoWidth.value,
+                      child: Opacity(
+                        opacity: _ozoOpacity.value,
+                        child: Text('OZO', style: textStyle),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 22),
-                  // Wordmark
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Transform.translate(
-                        offset: Offset(0, _sozoSlide.value),
-                        child: Opacity(
-                          opacity: _sozoOpacity.value,
-                          child: Text(
-                            'SOZO',
-                            style: TextStyle(
-                              color: accent,
-                              fontSize: 26,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 1.6,
-                              height: 1,
-                            ),
-                          ),
-                        ),
-                      ),
-                      Opacity(
-                        opacity: (_sozoOpacity.value + _readOpacity.value) / 2,
-                        child: Text(
-                          '-',
-                          style: TextStyle(
-                            color: AppColors.textTertiary,
-                            fontSize: 26,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: 1.6,
-                            height: 1,
-                          ),
-                        ),
-                      ),
-                      Transform.translate(
-                        offset: Offset(0, _readSlide.value),
-                        child: Opacity(
-                          opacity: _readOpacity.value,
-                          child: const Text(
-                            'READ',
-                            style: TextStyle(
-                              color: AppColors.textPrimary,
-                              fontSize: 26,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 1.6,
-                              height: 1,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  // Animated underline
-                  SizedBox(
-                    width: 140,
-                    height: 2,
+                  // " READ" — leading space gives a visible gap between SOZO
+                  // and READ once both are revealed. Same sweep treatment.
+                  ClipRect(
                     child: Align(
-                      alignment: Alignment.center,
-                      child: FractionallySizedBox(
-                        widthFactor: _underline.value,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: accent,
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
+                      alignment: Alignment.centerLeft,
+                      widthFactor: _readWidth.value,
+                      child: Opacity(
+                        opacity: _readOpacity.value,
+                        child: Text('  READ', style: textStyle),
                       ),
                     ),
                   ),
