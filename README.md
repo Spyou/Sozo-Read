@@ -1,5 +1,9 @@
 # Sozo Read
 
+<p align="center">
+  <img src="docs/preview.png" alt="Sozo Read preview" width="820" />
+</p>
+
 Sozo Read is a manga and web novel reader that pulls content from multiple
 online sources through JavaScript modules — the catalog can grow as new
 sources are added without needing an app update.
