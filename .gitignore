@@ -57,3 +57,12 @@ android/app/*.jks
 android/app/*.keystore
 android/key.properties
 android/KEYSTORE_INFO.md
+
+# Runtime env file (Supabase URL/anon, Cloudinary preset). Keys here are
+# the public/anon kind protected by RLS, but keeping the file out of git
+# avoids accidental leaks of anything else dropped in later.
+.env
+
+# Flutter project descriptor — auto-generated, varies by SDK version, not
+# useful to track per-commit.
+.metadata
