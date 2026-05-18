@@ -66,3 +66,7 @@ android/KEYSTORE_INFO.md
 # Flutter project descriptor — auto-generated, varies by SDK version, not
 # useful to track per-commit.
 .metadata
+
+# Supabase project artifacts (schema.sql + any future config). Kept local
+# only; the deployed project is the source of truth.
+supabase/
