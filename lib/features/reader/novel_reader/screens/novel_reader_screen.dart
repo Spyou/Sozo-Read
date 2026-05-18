@@ -64,6 +64,41 @@ class _NovelViewState extends State<_NovelView> {
     );
   }
 
+  /// Marks the current book as Completed and bounces back to the detail
+  /// screen. Single-tap with Undo in the snackbar — no confirmation
+  /// dialog (fewer taps; the undo affordance is a safety net).
+  Future<void> _markCompleted(BuildContext context) async {
+    final book = context.read<NovelReaderBloc>().state.book;
+    if (book == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final library = sl<LibraryRepository>();
+    final prev = library.get(book.sourceId, book.id)?.status;
+    await library.setStatus(
+      book.sourceId,
+      book.id,
+      LibraryStatus.completed,
+    );
+    if (!context.mounted) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: const Text('Marked as completed'),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () async {
+            await library.setStatus(
+              book.sourceId,
+              book.id,
+              prev ?? LibraryStatus.reading,
+            );
+          },
+        ),
+      ),
+    );
+    // Pop back to detail so the user sees the new "Completed" state in
+    // the chapter list immediately.
+    if (context.canPop()) context.pop();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -90,6 +125,12 @@ class _NovelViewState extends State<_NovelView> {
           ),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.task_alt_rounded),
+            color: fg,
+            tooltip: 'Mark as completed',
+            onPressed: () => _markCompleted(context),
+          ),
           IconButton(
             icon: const Icon(Icons.text_decrease),
             color: fg,

@@ -159,6 +159,160 @@ Future<void> openMangaDirectionSheet(
   );
 }
 
+Future<void> openMangaColorFilterSheet(
+  BuildContext context,
+  MangaColorFilter current,
+) async {
+  final cubit = context.read<MangaPrefsCubit>();
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (ctx) {
+      return SettingsSheetShell(
+        title: 'Color filter',
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final entry in const [
+              (MangaColorFilter.none, Icons.do_not_disturb_alt_rounded),
+              (MangaColorFilter.sepia, Icons.wb_iridescent_rounded),
+              (MangaColorFilter.invert, Icons.invert_colors_rounded),
+              (MangaColorFilter.blueLight, Icons.nightlight_round),
+            ])
+              ListTile(
+                leading: Icon(entry.$2),
+                title: Text(colorFilterLabel(entry.$1)),
+                trailing: entry.$1 == current
+                    ? Icon(Icons.check,
+                        color: Theme.of(ctx).colorScheme.primary)
+                    : null,
+                onTap: () {
+                  cubit.setColorFilter(entry.$1);
+                  Navigator.pop(ctx);
+                },
+              ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+Future<void> openMangaAutoScrollSheet(
+  BuildContext context,
+  MangaAutoScroll current,
+) async {
+  final cubit = context.read<MangaPrefsCubit>();
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (ctx) {
+      return SettingsSheetShell(
+        title: 'Auto-scroll',
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final entry in const [
+              (MangaAutoScroll.off, Icons.pause_circle_outline_rounded),
+              (MangaAutoScroll.slow, Icons.speed_rounded),
+              (MangaAutoScroll.medium, Icons.speed_rounded),
+              (MangaAutoScroll.fast, Icons.speed_rounded),
+            ])
+              ListTile(
+                leading: Icon(entry.$2),
+                title: Text(autoScrollLabel(entry.$1)),
+                trailing: entry.$1 == current
+                    ? Icon(Icons.check,
+                        color: Theme.of(ctx).colorScheme.primary)
+                    : null,
+                onTap: () {
+                  cubit.setAutoScroll(entry.$1);
+                  Navigator.pop(ctx);
+                },
+              ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+Future<void> openMangaImageQualitySheet(
+  BuildContext context,
+  MangaImageQuality current,
+) async {
+  final cubit = context.read<MangaPrefsCubit>();
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (ctx) {
+      return SettingsSheetShell(
+        title: 'Image quality',
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final entry in const [
+              (MangaImageQuality.auto, Icons.auto_awesome_rounded),
+              (MangaImageQuality.high, Icons.high_quality_rounded),
+              (MangaImageQuality.low, Icons.sd_rounded),
+            ])
+              ListTile(
+                leading: Icon(entry.$2),
+                title: Text(imageQualityLabel(entry.$1)),
+                trailing: entry.$1 == current
+                    ? Icon(Icons.check,
+                        color: Theme.of(ctx).colorScheme.primary)
+                    : null,
+                onTap: () {
+                  cubit.setImageQuality(entry.$1);
+                  Navigator.pop(ctx);
+                },
+              ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+Future<void> openMangaOrientationLockSheet(
+  BuildContext context,
+  MangaOrientationLock current,
+) async {
+  final cubit = context.read<MangaPrefsCubit>();
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (ctx) {
+      return SettingsSheetShell(
+        title: 'Lock orientation',
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final entry in const [
+              (MangaOrientationLock.auto, Icons.screen_rotation_rounded),
+              (MangaOrientationLock.portrait, Icons.stay_current_portrait_rounded),
+              (MangaOrientationLock.landscape, Icons.stay_current_landscape_rounded),
+            ])
+              ListTile(
+                leading: Icon(entry.$2),
+                title: Text(orientationLockLabel(entry.$1)),
+                trailing: entry.$1 == current
+                    ? Icon(Icons.check,
+                        color: Theme.of(ctx).colorScheme.primary)
+                    : null,
+                onTap: () {
+                  cubit.setOrientationLock(entry.$1);
+                  Navigator.pop(ctx);
+                },
+              ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
 Future<void> openSliderDialog(
   BuildContext context, {
   required String title,
@@ -214,6 +368,54 @@ String themeLabel(ThemeMode m) {
       return 'Light';
     case ThemeMode.dark:
       return 'AMOLED Dark';
+  }
+}
+
+String colorFilterLabel(MangaColorFilter f) {
+  switch (f) {
+    case MangaColorFilter.none:
+      return 'None';
+    case MangaColorFilter.sepia:
+      return 'Sepia';
+    case MangaColorFilter.invert:
+      return 'Invert';
+    case MangaColorFilter.blueLight:
+      return 'Blue light reducer';
+  }
+}
+
+String autoScrollLabel(MangaAutoScroll a) {
+  switch (a) {
+    case MangaAutoScroll.off:
+      return 'Off';
+    case MangaAutoScroll.slow:
+      return 'Slow';
+    case MangaAutoScroll.medium:
+      return 'Medium';
+    case MangaAutoScroll.fast:
+      return 'Fast';
+  }
+}
+
+String imageQualityLabel(MangaImageQuality q) {
+  switch (q) {
+    case MangaImageQuality.auto:
+      return 'Auto';
+    case MangaImageQuality.high:
+      return 'High';
+    case MangaImageQuality.low:
+      return 'Low';
+  }
+}
+
+String orientationLockLabel(MangaOrientationLock o) {
+  switch (o) {
+    case MangaOrientationLock.auto:
+      return 'Auto';
+    case MangaOrientationLock.portrait:
+      return 'Portrait';
+    case MangaOrientationLock.landscape:
+      return 'Landscape';
   }
 }
 

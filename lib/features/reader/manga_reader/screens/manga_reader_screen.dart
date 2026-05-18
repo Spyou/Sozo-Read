@@ -1,20 +1,36 @@
 import 'dart:async';
 import 'dart:ui';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:go_router/go_router.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../../../core/di/injection.dart';
 import '../../../../core/models/book_detail.dart';
+import '../../../../core/models/chapter.dart';
+import '../../../../core/repository/downloads_repository.dart';
 import '../../../../core/repository/library_repository.dart';
 import '../../../../core/repository/provider_repository.dart';
 import '../../../../core/state/manga_prefs_cubit.dart';
 import '../../../../core/state/novel_prefs_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/state_views.dart';
+import '../../../settings/widgets/settings_dialogs.dart'
+    show
+        openMangaColorFilterSheet,
+        openMangaAutoScrollSheet,
+        openMangaImageQualitySheet,
+        openMangaOrientationLockSheet,
+        colorFilterLabel,
+        autoScrollLabel,
+        imageQualityLabel,
+        orientationLockLabel;
 import '../../widgets/reading_bg_picker_sheet.dart';
 import '../bloc/manga_reader_bloc.dart';
 import '../bloc/manga_reader_event.dart';
@@ -67,10 +83,23 @@ class _ReaderView extends StatefulWidget {
   State<_ReaderView> createState() => _ReaderViewState();
 }
 
-class _ReaderViewState extends State<_ReaderView> {
+class _ReaderViewState extends State<_ReaderView>
+    with SingleTickerProviderStateMixin {
   bool _chromeVisible = true;
   final _scrollController = ScrollController();
   late final PageController _pageController = PageController();
+
+  // Auto-scroll ticker — drives the vertical ScrollController at a constant
+  // pixels-per-second rate while autoScroll != off. Null when disabled.
+  Ticker? _autoScrollTicker;
+  Duration _lastAutoTick = Duration.zero;
+  MangaAutoScroll _autoScrollMode = MangaAutoScroll.off;
+  // Reactive speed read by the persistent ticker callback. Changing this
+  // while the ticker is running takes effect on the next frame.
+  double _autoScrollPxPerSec = 0;
+  // Counts consecutive frames where auto-scroll is stuck at maxScrollExtent.
+  // After ~0.5s, fires the chapter advance.
+  int _autoScrollEndFrames = 0;
 
   // Used to detect overscroll at end of chapter -> auto-advance.
   bool _autoAdvanceArmed = false;
@@ -80,6 +109,23 @@ class _ReaderViewState extends State<_ReaderView> {
   double? _baselineVolume;
   bool _suppressNextVolumeEvent = false;
   StreamSubscription<NovelPrefs>? _prefsSub;
+  StreamSubscription<MangaPrefs>? _mangaPrefsSub;
+
+  // InteractiveViewer transformation controllers — one for vertical, one
+  // for horizontal mode. Used to drive programmatic double-tap zoom.
+  final _verticalTransform = TransformationController();
+  final _horizontalTransform = TransformationController();
+  Offset? _doubleTapPosition;
+
+  // Page indicator overlay — visible briefly after each page change, even
+  // when chrome is hidden. Acts as an "I'm not lost" affordance.
+  bool _pageIndicatorVisible = false;
+  Timer? _pageIndicatorTimer;
+  int _lastIndicatedPage = -1;
+
+  // Tracks the last-applied orientation lock so we can detect transitions.
+  MangaOrientationLock? _appliedOrientation;
+  bool _wakelockEnabled = false;
 
   @override
   void initState() {
@@ -97,16 +143,161 @@ class _ReaderViewState extends State<_ReaderView> {
         _uninstallVolumeListener();
       }
     });
+
+    // Apply MangaPrefs side-effects (wakelock, orientation lock) once on
+    // mount and keep them in sync as the user toggles in settings.
+    final mangaPrefs = context.read<MangaPrefsCubit>();
+    _applyKeepScreenOn(mangaPrefs.state.keepScreenOn);
+    _applyOrientationLock(mangaPrefs.state.orientationLock);
+    _applyAutoScroll(mangaPrefs.state.autoScroll);
+    _mangaPrefsSub = mangaPrefs.stream.listen((p) {
+      if (!mounted) return;
+      _applyKeepScreenOn(p.keepScreenOn);
+      _applyOrientationLock(p.orientationLock);
+      _applyAutoScroll(p.autoScroll);
+    });
   }
 
   @override
   void dispose() {
     _prefsSub?.cancel();
+    _mangaPrefsSub?.cancel();
+    _pageIndicatorTimer?.cancel();
     _uninstallVolumeListener();
+    // Always release the wakelock and restore default orientation so the
+    // setting only applies while the reader is mounted.
+    if (_wakelockEnabled) {
+      // ignore: discarded_futures
+      WakelockPlus.disable().catchError((_) {});
+    }
+    _autoScrollTicker?.dispose();
+    SystemChrome.setPreferredOrientations(const []);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _scrollController.dispose();
     _pageController.dispose();
+    _verticalTransform.dispose();
+    _horizontalTransform.dispose();
     super.dispose();
+  }
+
+  Future<void> _applyKeepScreenOn(bool on) async {
+    if (on == _wakelockEnabled) return;
+    _wakelockEnabled = on;
+    try {
+      if (on) {
+        await WakelockPlus.enable();
+      } else {
+        await WakelockPlus.disable();
+      }
+    } catch (_) {
+      // Wakelock unsupported on this platform — no-op.
+    }
+  }
+
+  void _applyAutoScroll(MangaAutoScroll mode) {
+    if (mode == _autoScrollMode) return;
+    _autoScrollMode = mode;
+    _autoScrollEndFrames = 0;
+    _autoScrollPxPerSec = switch (mode) {
+      MangaAutoScroll.slow => 20.0,
+      MangaAutoScroll.medium => 50.0,
+      MangaAutoScroll.fast => 100.0,
+      MangaAutoScroll.off => 0.0,
+    };
+    if (mode == MangaAutoScroll.off) {
+      _autoScrollTicker?.stop();
+      return;
+    }
+    // SingleTickerProviderStateMixin only allows createTicker() to be called
+    // ONCE per State — disposing and re-creating throws. So we lazy-create
+    // once, then stop/start the same Ticker on every toggle. Speed changes
+    // are picked up via _autoScrollPxPerSec on each frame.
+    _autoScrollTicker ??= createTicker(_onAutoScrollTick);
+    _lastAutoTick = Duration.zero;
+    if (!_autoScrollTicker!.isActive) {
+      _autoScrollTicker!.start();
+    }
+  }
+
+  void _onAutoScrollTick(Duration elapsed) {
+    // Paged/horizontal reader uses PageController, not ScrollController —
+    // auto-scroll only makes sense for vertical/webtoon. The ScrollController
+    // won't have clients there; we no-op those frames silently.
+    if (!_scrollController.hasClients) {
+      _lastAutoTick = elapsed;
+      return;
+    }
+    final pos = _scrollController.position;
+
+    // Pause while the user is actively dragging — otherwise the next frame
+    // would yank them back. Reset the time baseline so when they release,
+    // we resume from the current position without a giant catch-up jump.
+    if (pos.userScrollDirection != ScrollDirection.idle) {
+      _lastAutoTick = elapsed;
+      _autoScrollEndFrames = 0;
+      return;
+    }
+
+    if (pos.maxScrollExtent <= 0) {
+      _lastAutoTick = elapsed;
+      return;
+    }
+
+    final dtSec = (elapsed - _lastAutoTick).inMicroseconds / 1000000.0;
+    _lastAutoTick = elapsed;
+    if (dtSec <= 0) return;
+
+    // If we're already pinned at the bottom, count frames — after ~0.5s
+    // stuck, fire the chapter advance. Don't stop the ticker; once the
+    // new chapter loads, ListView resets to 0 and ticker keeps going.
+    if (pos.pixels >= pos.maxScrollExtent - 1) {
+      _autoScrollEndFrames++;
+      if (_autoScrollEndFrames >= 30) {
+        _autoScrollEndFrames = 0;
+        _autoScrollAdvanceChapter();
+      }
+      return;
+    }
+    _autoScrollEndFrames = 0;
+
+    // Lazy-build means maxScrollExtent grows as we scroll. Clamp keeps us
+    // from overshooting any single frame, but we do NOT stop the ticker
+    // here — the next frame will see more extent available.
+    final next = (pos.pixels + _autoScrollPxPerSec * dtSec)
+        .clamp(0.0, pos.maxScrollExtent);
+    _scrollController.jumpTo(next);
+  }
+
+  void _autoScrollAdvanceChapter() {
+    if (!mounted) return;
+    final bloc = context.read<MangaReaderBloc>();
+    final state = bloc.state;
+    // Next chapter is at chapterIndex - 1 (chapters stored newest-first).
+    final nextIdx = state.chapterIndex - 1;
+    if (nextIdx >= 0) {
+      bloc.add(MangaReaderChapterChanged(nextIdx));
+    }
+  }
+
+  void _applyOrientationLock(MangaOrientationLock lock) {
+    if (_appliedOrientation == lock) return;
+    _appliedOrientation = lock;
+    switch (lock) {
+      case MangaOrientationLock.auto:
+        SystemChrome.setPreferredOrientations(const []);
+        break;
+      case MangaOrientationLock.portrait:
+        SystemChrome.setPreferredOrientations(const [
+          DeviceOrientation.portraitUp,
+        ]);
+        break;
+      case MangaOrientationLock.landscape:
+        SystemChrome.setPreferredOrientations(const [
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
+        ]);
+        break;
+    }
   }
 
   Future<void> _installVolumeListener() async {
@@ -235,6 +426,150 @@ class _ReaderViewState extends State<_ReaderView> {
       context.read<MangaReaderBloc>().state.pages.length;
   int get _maxPageIndex => (_pageCount - 1).clamp(0, _pageCount);
 
+  /// Resolves the active manga prefs, falling back to defaults if the cubit
+  /// is unreachable (e.g. mid-rebuild during a hot reload). Reads happen
+  /// often from hot paths so we keep it cheap.
+  MangaPrefs _readMangaPrefs() {
+    try {
+      return context.read<MangaPrefsCubit>().state;
+    } catch (_) {
+      return const MangaPrefs(
+        readingDirection: MangaReadingDirection.vertical,
+        cropEdges: false,
+        colorFilter: MangaColorFilter.none,
+        autoScroll: MangaAutoScroll.off,
+        imageQuality: MangaImageQuality.auto,
+        orientationLock: MangaOrientationLock.auto,
+        keepScreenOn: true,
+        tapZoneNavigation: true,
+      );
+    }
+  }
+
+  void _handleTapUp(TapUpDetails details, MangaReaderState state) {
+    final prefs = _readMangaPrefs();
+    if (!prefs.tapZoneNavigation) {
+      _toggleChrome();
+      return;
+    }
+    final size = context.size ?? MediaQuery.of(context).size;
+    if (state.mode == ReaderMode.vertical) {
+      // Top / middle / bottom thirds. Top scrolls up, bottom scrolls down.
+      final third = size.height / 3;
+      final y = details.localPosition.dy;
+      if (y < third) {
+        _scrollByViewport(forward: false);
+      } else if (y > size.height - third) {
+        _scrollByViewport(forward: true);
+      } else {
+        _toggleChrome();
+      }
+    } else {
+      // Left / middle / right thirds. Direction flips based on LTR/RTL.
+      final third = size.width / 3;
+      final x = details.localPosition.dx;
+      final isRtl = state.direction == ReadingDirection.rtl;
+      if (x < third) {
+        if (isRtl) {
+          _jumpToPage(state.pageIndex + 1, state.mode);
+        } else {
+          _jumpToPage(state.pageIndex - 1, state.mode);
+        }
+      } else if (x > size.width - third) {
+        if (isRtl) {
+          _jumpToPage(state.pageIndex - 1, state.mode);
+        } else {
+          _jumpToPage(state.pageIndex + 1, state.mode);
+        }
+      } else {
+        _toggleChrome();
+      }
+    }
+  }
+
+  void _scrollByViewport({required bool forward}) {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    final step = MediaQuery.of(context).size.height * 0.85;
+    final target = (_scrollController.offset + (forward ? step : -step))
+        .clamp(pos.minScrollExtent, pos.maxScrollExtent);
+    _scrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOut,
+    );
+  }
+
+  void _onDoubleTapDown(TapDownDetails details) {
+    _doubleTapPosition = details.localPosition;
+  }
+
+  void _handleDoubleTap(ReaderMode mode) {
+    final controller =
+        mode == ReaderMode.vertical ? _verticalTransform : _horizontalTransform;
+    // If already zoomed in, reset. Otherwise zoom 2x centered on the tap.
+    final current = controller.value.getMaxScaleOnAxis();
+    if (current > 1.01) {
+      controller.value = Matrix4.identity();
+      return;
+    }
+    final pos = _doubleTapPosition ??
+        Offset(
+          MediaQuery.of(context).size.width / 2,
+          MediaQuery.of(context).size.height / 2,
+        );
+    const zoom = 2.0;
+    final matrix = Matrix4.identity()
+      ..translateByDouble(
+        -pos.dx * (zoom - 1),
+        -pos.dy * (zoom - 1),
+        0,
+        1,
+      )
+      ..scaleByDouble(zoom, zoom, 1, 1);
+    controller.value = matrix;
+  }
+
+  /// Show the page-number pill for ~2 seconds. Called whenever the bloc
+  /// emits a new pageIndex.
+  void _flashPageIndicator(int page) {
+    if (page == _lastIndicatedPage && _pageIndicatorVisible) return;
+    _lastIndicatedPage = page;
+    setState(() => _pageIndicatorVisible = true);
+    _pageIndicatorTimer?.cancel();
+    _pageIndicatorTimer = Timer(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      setState(() => _pageIndicatorVisible = false);
+    });
+  }
+
+  /// Cycles through reading directions on the top-bar quick-toggle.
+  void _cycleReadingDirection() {
+    final cubit = context.read<MangaPrefsCubit>();
+    final current = cubit.state.readingDirection;
+    final next = switch (current) {
+      MangaReadingDirection.vertical => MangaReadingDirection.horizontalLtr,
+      MangaReadingDirection.horizontalLtr => MangaReadingDirection.horizontalRtl,
+      MangaReadingDirection.horizontalRtl => MangaReadingDirection.vertical,
+    };
+    cubit.setDirection(next);
+    // Mirror the change into the reader bloc so the on-screen layout
+    // re-renders without waiting for the user to re-enter the screen.
+    final bloc = context.read<MangaReaderBloc>();
+    final targetMode = next == MangaReadingDirection.vertical
+        ? ReaderMode.vertical
+        : ReaderMode.horizontal;
+    bloc.add(MangaReaderModeSet(targetMode));
+    if (targetMode == ReaderMode.horizontal) {
+      final desired = next == MangaReadingDirection.horizontalRtl
+          ? ReadingDirection.rtl
+          : ReadingDirection.ltr;
+      if (bloc.state.direction != desired) {
+        bloc.add(const MangaReaderDirectionToggled());
+      }
+    }
+  }
+
   Future<void> _openChapterSheet(BookDetail book, int currentIndex) async {
     await showModalBottomSheet(
       context: context,
@@ -315,13 +650,20 @@ class _ReaderViewState extends State<_ReaderView> {
       body: BlocConsumer<MangaReaderBloc, MangaReaderState>(
         listenWhen: (a, b) =>
             a.chapterIndex != b.chapterIndex ||
+            a.pageIndex != b.pageIndex ||
             (a.pendingResumeProgress != b.pendingResumeProgress) ||
             (a.status != b.status),
         listener: (ctx, state) {
-          // Reset scrollers when a new chapter starts loading.
+          // Reset scrollers + zoom when a new chapter starts loading.
           if (state.status == ReaderStatus.loading) {
             if (_scrollController.hasClients) _scrollController.jumpTo(0);
             if (_pageController.hasClients) _pageController.jumpToPage(0);
+            _verticalTransform.value = Matrix4.identity();
+            _horizontalTransform.value = Matrix4.identity();
+          }
+          // Flash the page-number indicator on every page change.
+          if (state.pages.isNotEmpty) {
+            _flashPageIndicator(state.pageIndex);
           }
           // Apply pending resume once pages are loaded.
           if (state.status == ReaderStatus.success &&
@@ -355,31 +697,48 @@ class _ReaderViewState extends State<_ReaderView> {
         },
         builder: (context, state) {
           final bgMode = context.watch<NovelPrefsCubit>().state.backgroundMode;
+          final total = state.pages.length;
+          final hasPages = total > 0;
+          final book = state.book;
+          // The "next chapter" — list is descending so newer = lower index.
+          final nextChapterIndex = state.chapterIndex - 1;
+          final hasNextChapter = book != null &&
+              nextChapterIndex >= 0 &&
+              nextChapterIndex < book.chapters.length;
+          final nextChapterTitle = hasNextChapter
+              ? book.chapters[nextChapterIndex].title
+              : null;
           return Stack(
             children: [
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTap: _toggleChrome,
+                onTapUp: (d) => _handleTapUp(d, state),
+                onDoubleTapDown: _onDoubleTapDown,
+                onDoubleTap: () => _handleDoubleTap(state.mode),
                 child: _PageContent(
                   state: state,
                   bgMode: bgMode,
                   scrollController: _scrollController,
                   pageController: _pageController,
-                  onTapLeft: () =>
-                      _jumpToPage(state.pageIndex - 1, state.mode),
-                  onTapRight: () =>
-                      _jumpToPage(state.pageIndex + 1, state.mode),
-                  onTapCenter: _toggleChrome,
+                  verticalTransform: _verticalTransform,
+                  horizontalTransform: _horizontalTransform,
+                  hasNextChapter: hasNextChapter,
+                  nextChapterTitle: nextChapterTitle,
+                  nextChapterIndex: nextChapterIndex,
+                  onOpenNextChapter: hasNextChapter
+                      ? () => context
+                          .read<MangaReaderBloc>()
+                          .add(MangaReaderChapterChanged(nextChapterIndex))
+                      : null,
                   onArmAutoAdvance: () => _autoAdvanceArmed = true,
                   onTryAutoAdvance: () {
                     if (!_autoAdvanceArmed) return;
                     _autoAdvanceArmed = false;
-                    // Next chapter (in user-facing direction: lower index = newer).
-                    final book = state.book;
                     if (book == null) return;
-                    final nextIdx = state.chapterIndex - 1;
-                    if (nextIdx >= 0) {
-                      context.read<MangaReaderBloc>().add(MangaReaderChapterChanged(nextIdx));
+                    if (hasNextChapter) {
+                      context
+                          .read<MangaReaderBloc>()
+                          .add(MangaReaderChapterChanged(nextChapterIndex));
                     }
                   },
                 ),
@@ -403,6 +762,8 @@ class _ReaderViewState extends State<_ReaderView> {
                     }
                   },
                   onOpenSettings: () => _openSettingsSheet(state),
+                  onMarkComplete: () => _markCompleted(state),
+                  onCycleDirection: _cycleReadingDirection,
                 ),
                 _BottomBar(
                   state: state,
@@ -415,6 +776,37 @@ class _ReaderViewState extends State<_ReaderView> {
                       .add(MangaReaderChapterChanged(state.chapterIndex - 1)),
                 ),
               ],
+
+              // Page-number affordance — visible even when chrome is hidden.
+              if (hasPages)
+                Positioned(
+                  right: 14,
+                  bottom: 24,
+                  child: IgnorePointer(
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 240),
+                      opacity: _pageIndicatorVisible ? 1.0 : 0.0,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.55),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Text(
+                          '${state.pageIndex.clamp(0, total - 1) + 1} / $total',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
 
               if (state.autoAdvancing)
                 Container(
@@ -450,6 +842,7 @@ class _ReaderViewState extends State<_ReaderView> {
     // so we have to re-expose them via BlocProvider.value.
     final bloc = context.read<MangaReaderBloc>();
     final prefs = context.read<NovelPrefsCubit>();
+    final mangaPrefs = context.read<MangaPrefsCubit>();
     await showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -459,6 +852,7 @@ class _ReaderViewState extends State<_ReaderView> {
           providers: [
             BlocProvider.value(value: bloc),
             BlocProvider.value(value: prefs),
+            BlocProvider.value(value: mangaPrefs),
           ],
           child: BlocBuilder<MangaReaderBloc, MangaReaderState>(
             builder: (_, s) => _ReaderSettingsSheet(state: s, bloc: bloc),
@@ -466,6 +860,39 @@ class _ReaderViewState extends State<_ReaderView> {
         );
       },
     );
+  }
+
+  /// Marks the current book as Completed and bounces back to the detail
+  /// screen. Single-tap with Undo — the snackbar action restores the
+  /// previous status if the user mis-tapped.
+  Future<void> _markCompleted(MangaReaderState state) async {
+    final book = state.book;
+    if (book == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final library = sl<LibraryRepository>();
+    final prev = library.get(book.sourceId, book.id)?.status;
+    await library.setStatus(
+      book.sourceId,
+      book.id,
+      LibraryStatus.completed,
+    );
+    if (!mounted) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: const Text('Marked as completed'),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () async {
+            await library.setStatus(
+              book.sourceId,
+              book.id,
+              prev ?? LibraryStatus.reading,
+            );
+          },
+        ),
+      ),
+    );
+    if (context.canPop()) context.pop();
   }
 }
 
@@ -485,7 +912,8 @@ class _ReaderSettingsSheet extends StatelessWidget {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 10, 20, 18),
-          child: Column(
+          child: SingleChildScrollView(
+            child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -576,32 +1004,77 @@ class _ReaderSettingsSheet extends StatelessWidget {
 
               const SizedBox(height: 18),
               BlocBuilder<NovelPrefsCubit, NovelPrefs>(
-                builder: (context, prefs) => Row(
-                  children: [
-                    const Icon(Icons.volume_up_rounded,
-                        color: AppColors.textSecondary, size: 18),
-                    const SizedBox(width: 10),
-                    const Expanded(
-                      child: Text(
-                        'Volume buttons',
-                        style: TextStyle(
-                          color: AppColors.textPrimary,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    Switch.adaptive(
-                      value: prefs.useVolumeButtons,
-                      activeTrackColor: AppColors.primary,
-                      onChanged: (v) => context
-                          .read<NovelPrefsCubit>()
-                          .setUseVolumeButtons(v),
-                    ),
-                  ],
+                builder: (context, prefs) => _SheetSwitchRow(
+                  icon: Icons.volume_up_rounded,
+                  label: 'Volume buttons',
+                  value: prefs.useVolumeButtons,
+                  onChanged: (v) => context
+                      .read<NovelPrefsCubit>()
+                      .setUseVolumeButtons(v),
                 ),
               ),
+
+              const SizedBox(height: 18),
+              _SectionLabel('Reading'),
+              const SizedBox(height: 4),
+              BlocBuilder<MangaPrefsCubit, MangaPrefs>(
+                builder: (context, mp) {
+                  final cubit = context.read<MangaPrefsCubit>();
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _SheetSwitchRow(
+                        icon: Icons.touch_app_outlined,
+                        label: 'Tap zones',
+                        value: mp.tapZoneNavigation,
+                        onChanged: cubit.setTapZoneNavigation,
+                      ),
+                      _SheetSwitchRow(
+                        icon: Icons.lightbulb_outline,
+                        label: 'Keep screen on',
+                        value: mp.keepScreenOn,
+                        onChanged: cubit.setKeepScreenOn,
+                      ),
+                      _SheetSwitchRow(
+                        icon: Icons.crop_rounded,
+                        label: 'Crop edges',
+                        value: mp.cropEdges,
+                        onChanged: cubit.setCropEdges,
+                      ),
+                      _SheetPickerRow(
+                        icon: Icons.color_lens_outlined,
+                        label: 'Color filter',
+                        valueLabel: colorFilterLabel(mp.colorFilter),
+                        onTap: () =>
+                            openMangaColorFilterSheet(context, mp.colorFilter),
+                      ),
+                      _SheetPickerRow(
+                        icon: Icons.swap_vert_rounded,
+                        label: 'Auto-scroll',
+                        valueLabel: autoScrollLabel(mp.autoScroll),
+                        onTap: () =>
+                            openMangaAutoScrollSheet(context, mp.autoScroll),
+                      ),
+                      _SheetPickerRow(
+                        icon: Icons.high_quality_outlined,
+                        label: 'Image quality',
+                        valueLabel: imageQualityLabel(mp.imageQuality),
+                        onTap: () =>
+                            openMangaImageQualitySheet(context, mp.imageQuality),
+                      ),
+                      _SheetPickerRow(
+                        icon: Icons.screen_rotation_rounded,
+                        label: 'Lock orientation',
+                        valueLabel: orientationLockLabel(mp.orientationLock),
+                        onTap: () => openMangaOrientationLockSheet(
+                            context, mp.orientationLock),
+                      ),
+                    ],
+                  );
+                },
+              ),
             ],
+          ),
           ),
         ),
       ),
@@ -620,6 +1093,97 @@ class _SectionLabel extends StatelessWidget {
         color: AppColors.textSecondary,
         fontSize: 12,
         fontWeight: FontWeight.w600,
+      ),
+    );
+  }
+}
+
+class _SheetSwitchRow extends StatelessWidget {
+  const _SheetSwitchRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+  final IconData icon;
+  final String label;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Icon(icon, color: AppColors.textSecondary, size: 18),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Switch.adaptive(
+            value: value,
+            activeTrackColor: AppColors.primary,
+            onChanged: onChanged,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SheetPickerRow extends StatelessWidget {
+  const _SheetPickerRow({
+    required this.icon,
+    required this.label,
+    required this.valueLabel,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String label;
+  final String valueLabel;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Row(
+          children: [
+            Icon(icon, color: AppColors.textSecondary, size: 18),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            Text(
+              valueLabel,
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(width: 4),
+            const Icon(Icons.chevron_right_rounded,
+                color: AppColors.textTertiary, size: 18),
+          ],
+        ),
       ),
     );
   }
@@ -757,9 +1321,12 @@ class _PageContent extends StatelessWidget {
     required this.bgMode,
     required this.scrollController,
     required this.pageController,
-    required this.onTapLeft,
-    required this.onTapRight,
-    required this.onTapCenter,
+    required this.verticalTransform,
+    required this.horizontalTransform,
+    required this.hasNextChapter,
+    required this.nextChapterTitle,
+    required this.nextChapterIndex,
+    required this.onOpenNextChapter,
     required this.onArmAutoAdvance,
     required this.onTryAutoAdvance,
   });
@@ -767,9 +1334,12 @@ class _PageContent extends StatelessWidget {
   final ReadingBgMode bgMode;
   final ScrollController scrollController;
   final PageController pageController;
-  final VoidCallback onTapLeft;
-  final VoidCallback onTapRight;
-  final VoidCallback onTapCenter;
+  final TransformationController verticalTransform;
+  final TransformationController horizontalTransform;
+  final bool hasNextChapter;
+  final String? nextChapterTitle;
+  final int nextChapterIndex;
+  final VoidCallback? onOpenNextChapter;
   final VoidCallback onArmAutoAdvance;
   final VoidCallback onTryAutoAdvance;
 
@@ -806,6 +1376,10 @@ class _PageContent extends StatelessWidget {
         state: state,
         bgMode: bgMode,
         controller: scrollController,
+        transform: verticalTransform,
+        hasNextChapter: hasNextChapter,
+        nextChapterTitle: nextChapterTitle,
+        onOpenNextChapter: onOpenNextChapter,
         onArm: onArmAutoAdvance,
         onTryAdvance: onTryAutoAdvance,
       );
@@ -813,9 +1387,10 @@ class _PageContent extends StatelessWidget {
     return _HorizontalReader(
       state: state,
       controller: pageController,
-      onTapLeft: onTapLeft,
-      onTapRight: onTapRight,
-      onTapCenter: onTapCenter,
+      transform: horizontalTransform,
+      hasNextChapter: hasNextChapter,
+      nextChapterTitle: nextChapterTitle,
+      onOpenNextChapter: onOpenNextChapter,
     );
   }
 }
@@ -825,12 +1400,20 @@ class _VerticalReader extends StatelessWidget {
     required this.state,
     required this.bgMode,
     required this.controller,
+    required this.transform,
+    required this.hasNextChapter,
+    required this.nextChapterTitle,
+    required this.onOpenNextChapter,
     required this.onArm,
     required this.onTryAdvance,
   });
   final MangaReaderState state;
   final ReadingBgMode bgMode;
   final ScrollController controller;
+  final TransformationController transform;
+  final bool hasNextChapter;
+  final String? nextChapterTitle;
+  final VoidCallback? onOpenNextChapter;
   final VoidCallback onArm;
   final VoidCallback onTryAdvance;
 
@@ -839,6 +1422,10 @@ class _VerticalReader extends StatelessWidget {
     final gap = ReadingBg.mangaGapFor(bgMode, context);
     final isLight = bgMode == ReadingBgMode.white || bgMode == ReadingBgMode.sepia;
     final footerText = isLight ? Colors.black38 : Colors.white38;
+    // The list has one trailing slot for the next-chapter preview card when
+    // available; the bloc's pageIndex math still tracks page count only.
+    final pageCount = state.pages.length;
+    final itemCount = hasNextChapter ? pageCount + 1 : pageCount;
     return NotificationListener<ScrollNotification>(
       onNotification: (n) {
         if (n is ScrollUpdateNotification) {
@@ -864,31 +1451,40 @@ class _VerticalReader extends StatelessWidget {
       child: Container(
         color: gap,
         child: InteractiveViewer(
+          transformationController: transform,
           minScale: 1,
           maxScale: 4,
           panEnabled: true,
           child: ListView.builder(
             controller: controller,
             cacheExtent: MediaQuery.of(context).size.height * 4,
-            itemCount: state.pages.length,
-            itemBuilder: (_, i) => Padding(
-              padding: const EdgeInsets.symmetric(vertical: 1),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  PageImage(page: state.pages[i]),
-                  Container(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    color: gap,
-                    child: Text(
-                      '${i + 1} / ${state.pages.length}',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: footerText, fontSize: 11),
+            itemCount: itemCount,
+            itemBuilder: (_, i) {
+              if (i >= pageCount) {
+                return _NextChapterCard(
+                  title: nextChapterTitle ?? '',
+                  onOpen: onOpenNextChapter,
+                );
+              }
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 1),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    PageImage(page: state.pages[i]),
+                    Container(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      color: gap,
+                      child: Text(
+                        '${i + 1} / $pageCount',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: footerText, fontSize: 11),
+                      ),
                     ),
-                  ),
-                ],
-              ),
-            ),
+                  ],
+                ),
+              );
+            },
           ),
         ),
       ),
@@ -900,62 +1496,85 @@ class _HorizontalReader extends StatelessWidget {
   const _HorizontalReader({
     required this.state,
     required this.controller,
-    required this.onTapLeft,
-    required this.onTapRight,
-    required this.onTapCenter,
+    required this.transform,
+    required this.hasNextChapter,
+    required this.nextChapterTitle,
+    required this.onOpenNextChapter,
   });
   final MangaReaderState state;
   final PageController controller;
-  final VoidCallback onTapLeft;
-  final VoidCallback onTapRight;
-  final VoidCallback onTapCenter;
+  final TransformationController transform;
+  final bool hasNextChapter;
+  final String? nextChapterTitle;
+  final VoidCallback? onOpenNextChapter;
 
   @override
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
+    final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
+    final pageCount = state.pages.length;
+    final itemCount = hasNextChapter ? pageCount + 1 : pageCount;
     return Stack(
       children: [
         PageView.builder(
           controller: controller,
-          itemCount: state.pages.length,
+          itemCount: itemCount,
           reverse: state.direction == ReadingDirection.rtl,
-          onPageChanged: (i) => context
-              .read<MangaReaderBloc>()
-              .add(MangaReaderPageChanged(i)),
-          itemBuilder: (_, i) => InteractiveViewer(
-            minScale: 1,
-            maxScale: 4,
-            panEnabled: true,
-            child: Center(
-              child: PageImage(page: state.pages[i], fit: BoxFit.contain),
-            ),
-          ),
-        ),
-        // Tap zones — overlay invisible regions on left/center/right.
-        Row(
-          children: [
-            Expanded(
-              flex: 3,
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: state.direction == ReadingDirection.rtl ? onTapRight : onTapLeft,
+          onPageChanged: (i) {
+            // Clamp page-change events to actual page range so the bloc
+            // doesn't get a phantom pageIndex pointing at the trailing card.
+            final clamped = i.clamp(0, pageCount - 1);
+            context
+                .read<MangaReaderBloc>()
+                .add(MangaReaderPageChanged(clamped));
+          },
+          itemBuilder: (_, i) {
+            if (i >= pageCount) {
+              return _NextChapterCard(
+                title: nextChapterTitle ?? '',
+                onOpen: onOpenNextChapter,
+              );
+            }
+            // Two-page spread when landscape — pair page i with page i+1
+            // if available, else show page i alone.
+            if (isLandscape && i + 1 < pageCount) {
+              return InteractiveViewer(
+                transformationController: transform,
+                minScale: 1,
+                maxScale: 4,
+                panEnabled: true,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Center(
+                        child: PageImage(
+                          page: state.pages[i],
+                          fit: BoxFit.contain,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Center(
+                        child: PageImage(
+                          page: state.pages[i + 1],
+                          fit: BoxFit.contain,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+            return InteractiveViewer(
+              transformationController: transform,
+              minScale: 1,
+              maxScale: 4,
+              panEnabled: true,
+              child: Center(
+                child: PageImage(page: state.pages[i], fit: BoxFit.contain),
               ),
-            ),
-            Expanded(
-              flex: 4,
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: onTapCenter,
-              ),
-            ),
-            Expanded(
-              flex: 3,
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: state.direction == ReadingDirection.rtl ? onTapLeft : onTapRight,
-              ),
-            ),
-          ],
+            );
+          },
         ),
         // Tiny edge hint while controls are hidden — show direction arrows
         // briefly on first page entry. Subtle; doesn't intrude.
@@ -964,17 +1583,87 @@ class _HorizontalReader extends StatelessWidget {
             left: 8,
             top: 0,
             bottom: 0,
-            child: Center(
-              child: Icon(
-                state.direction == ReadingDirection.rtl
-                    ? Icons.chevron_right
-                    : Icons.chevron_left,
-                color: Colors.white24,
-                size: width * 0.04,
+            child: IgnorePointer(
+              child: Center(
+                child: Icon(
+                  state.direction == ReadingDirection.rtl
+                      ? Icons.chevron_right
+                      : Icons.chevron_left,
+                  color: Colors.white24,
+                  size: width * 0.04,
+                ),
               ),
             ),
           ),
       ],
+    );
+  }
+}
+
+class _NextChapterCard extends StatelessWidget {
+  const _NextChapterCard({required this.title, required this.onOpen});
+  final String title;
+  final VoidCallback? onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      alignment: Alignment.center,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 360),
+        padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: AppColors.textTertiary.withValues(alpha: 0.18),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Up next',
+              style: TextStyle(
+                color: AppColors.textTertiary,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.5,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: onOpen,
+                icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                label: const Text('Open'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -985,11 +1674,15 @@ class _TopBar extends StatelessWidget {
     required this.onBack,
     required this.onOpenChapters,
     required this.onOpenSettings,
+    required this.onMarkComplete,
+    required this.onCycleDirection,
   });
   final MangaReaderState state;
   final VoidCallback onBack;
   final VoidCallback onOpenChapters;
   final VoidCallback onOpenSettings;
+  final VoidCallback onMarkComplete;
+  final VoidCallback onCycleDirection;
 
   @override
   Widget build(BuildContext context) {
@@ -997,6 +1690,15 @@ class _TopBar extends StatelessWidget {
     final chapter = (book != null && book.chapters.isNotEmpty)
         ? book.chapters[state.chapterIndex].title
         : '';
+    // Pick the direction icon from the persisted preference so it stays in
+    // sync with what the next reader-open will use, not just the current
+    // session's bloc state.
+    final prefs = context.watch<MangaPrefsCubit>().state;
+    final IconData dirIcon = switch (prefs.readingDirection) {
+      MangaReadingDirection.vertical => Icons.swap_vert_rounded,
+      MangaReadingDirection.horizontalLtr => Icons.east_rounded,
+      MangaReadingDirection.horizontalRtl => Icons.west_rounded,
+    };
     return Positioned(
       top: 0,
       left: 0,
@@ -1041,6 +1743,9 @@ class _TopBar extends StatelessWidget {
                         ],
                       ),
                     ),
+                    // Most-used actions stay visible. Direction toggle,
+                    // download, and mark-complete live in the overflow
+                    // menu so the top bar doesn't squeeze the title.
                     IconButton(
                       tooltip: 'Chapters',
                       icon: const Icon(Icons.list, color: Colors.white),
@@ -1051,6 +1756,71 @@ class _TopBar extends StatelessWidget {
                       icon: const Icon(Icons.tune_rounded, color: Colors.white),
                       onPressed: onOpenSettings,
                     ),
+                    PopupMenuButton<_TopBarAction>(
+                      tooltip: 'More',
+                      color: const Color(0xFF1A1A1A),
+                      icon: const Icon(Icons.more_vert, color: Colors.white),
+                      onSelected: (action) {
+                        switch (action) {
+                          case _TopBarAction.cycleDirection:
+                            onCycleDirection();
+                            break;
+                          case _TopBarAction.download:
+                            if (book != null &&
+                                state.chapterIndex >= 0 &&
+                                state.chapterIndex < book.chapters.length) {
+                              _ReaderDownloadButton.start(
+                                context,
+                                book,
+                                book.chapters[state.chapterIndex],
+                              );
+                            }
+                            break;
+                          case _TopBarAction.markComplete:
+                            onMarkComplete();
+                            break;
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        PopupMenuItem(
+                          value: _TopBarAction.cycleDirection,
+                          child: Row(
+                            children: [
+                              Icon(dirIcon, color: Colors.white70, size: 20),
+                              const SizedBox(width: 12),
+                              const Text(
+                                'Reading direction',
+                                style: TextStyle(color: Colors.white),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (book != null &&
+                            state.chapterIndex >= 0 &&
+                            state.chapterIndex < book.chapters.length)
+                          PopupMenuItem(
+                            value: _TopBarAction.download,
+                            child: _DownloadMenuRow(
+                              book: book,
+                              chapter: book.chapters[state.chapterIndex],
+                            ),
+                          ),
+                        const PopupMenuItem(
+                          value: _TopBarAction.markComplete,
+                          child: Row(
+                            children: [
+                              Icon(Icons.task_alt_rounded,
+                                  color: Colors.white70, size: 20),
+                              SizedBox(width: 12),
+                              Text(
+                                'Mark as completed',
+                                style: TextStyle(color: Colors.white),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -1058,6 +1828,136 @@ class _TopBar extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Top-bar download trigger for the chapter currently being read. Mirrors
+/// the icon-state logic from the detail screen's chapter list.
+/// Actions surfaced through the top-bar overflow menu. Kept as an enum so
+/// `PopupMenuButton.onSelected` is type-checked at the call site.
+enum _TopBarAction { cycleDirection, download, markComplete }
+
+/// Compact row used inside the top-bar overflow menu's "Download chapter"
+/// entry. Mirrors the status states of [_ReaderDownloadButton] but renders
+/// inline next to the menu label so the user can see at a glance whether
+/// the chapter is already saved.
+class _DownloadMenuRow extends StatelessWidget {
+  const _DownloadMenuRow({required this.book, required this.chapter});
+
+  final BookDetail book;
+  final Chapter chapter;
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = sl<DownloadsRepository>();
+    return StreamBuilder<DownloadEntry>(
+      stream: repo.watch(book.sourceId, book.id, chapter.id),
+      builder: (context, snap) {
+        final entry =
+            snap.data ?? repo.get(book.sourceId, book.id, chapter.id);
+        final isDeleted = entry?.error == '__deleted__';
+        final effective = isDeleted ? null : entry;
+        final (IconData icon, String label) = switch (effective?.status) {
+          null => (Icons.download_for_offline_outlined, 'Download chapter'),
+          DownloadStatus.queued ||
+          DownloadStatus.downloading =>
+            (Icons.cloud_download_outlined, 'Downloading…'),
+          DownloadStatus.done => (Icons.check_circle, 'Downloaded'),
+          DownloadStatus.failed => (Icons.error_outline, 'Retry download'),
+        };
+        return Row(
+          children: [
+            Icon(icon, color: Colors.white70, size: 20),
+            const SizedBox(width: 12),
+            Text(label, style: const TextStyle(color: Colors.white)),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ReaderDownloadButton extends StatelessWidget {
+  const _ReaderDownloadButton({required this.book, required this.chapter});
+
+  final BookDetail book;
+  final Chapter chapter;
+
+  /// Shared download trigger — used by the standalone IconButton AND by
+  /// the overflow menu so both paths kick the same enqueue flow.
+  static Future<void> start(
+    BuildContext context,
+    BookDetail book,
+    Chapter chapter,
+  ) async {
+    final repo = sl<DownloadsRepository>();
+    final providerRepo = sl<ProviderRepository>();
+    final dio = sl<Dio>();
+    final messenger = ScaffoldMessenger.of(context);
+    final pagesRes = await providerRepo.pages(book.sourceId, chapter.url);
+    if (!context.mounted) return;
+    pagesRes.fold(
+      (f) => messenger.showSnackBar(
+        SnackBar(content: Text('Failed to fetch pages: ${f.message}')),
+      ),
+      (pages) {
+        if (pages.isEmpty) {
+          messenger.showSnackBar(
+            const SnackBar(content: Text('No pages to download')),
+          );
+          return;
+        }
+        // ignore: discarded_futures
+        repo.enqueue(book, chapter, pages, dio);
+        messenger.showSnackBar(
+          SnackBar(content: Text('Downloading ${chapter.title}…')),
+        );
+      },
+    );
+  }
+
+  Future<void> _start(BuildContext context) => start(context, book, chapter);
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = sl<DownloadsRepository>();
+    return StreamBuilder<DownloadEntry>(
+      stream: repo.watch(book.sourceId, book.id, chapter.id),
+      builder: (context, snap) {
+        final entry = snap.data ?? repo.get(book.sourceId, book.id, chapter.id);
+        final isDeleted = entry?.error == '__deleted__';
+        final effective = isDeleted ? null : entry;
+        if (effective == null) {
+          return IconButton(
+            tooltip: 'Download chapter',
+            icon: const Icon(Icons.download_for_offline_outlined,
+                color: Colors.white),
+            onPressed: () => _start(context),
+          );
+        }
+        switch (effective.status) {
+          case DownloadStatus.queued:
+          case DownloadStatus.downloading:
+            return const IconButton(
+              tooltip: 'Downloading',
+              icon: Icon(Icons.cloud_download_outlined, color: Colors.white),
+              onPressed: null,
+            );
+          case DownloadStatus.done:
+            return const IconButton(
+              tooltip: 'Downloaded',
+              icon: Icon(Icons.check_circle, color: Colors.white),
+              onPressed: null,
+            );
+          case DownloadStatus.failed:
+            return IconButton(
+              tooltip: 'Retry download',
+              icon: const Icon(Icons.error_outline, color: Colors.white),
+              onPressed: () => _start(context),
+            );
+        }
+      },
     );
   }
 }

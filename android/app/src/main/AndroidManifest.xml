@@ -21,8 +21,8 @@
     <application
         android:label="Sozo Read"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher_red"
-        android:roundIcon="@mipmap/ic_launcher_red">
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -70,7 +70,7 @@
             android:name="com.spyou.sozo_manga.MainActivityRed"
             android:enabled="false"
             android:exported="true"
-            android:icon="@mipmap/ic_launcher_red"
+            android:icon="@mipmap/ic_launcher"
             android:roundIcon="@mipmap/ic_launcher_red"
             android:label="Sozo Read"
             android:targetActivity=".MainActivity">
@@ -84,7 +84,7 @@
             android:name="com.spyou.sozo_manga.MainActivityBlue"
             android:enabled="false"
             android:exported="true"
-            android:icon="@mipmap/ic_launcher_blue"
+            android:icon="@mipmap/ic_launcher"
             android:roundIcon="@mipmap/ic_launcher_blue"
             android:label="Sozo Read"
             android:targetActivity=".MainActivity">
@@ -98,7 +98,7 @@
             android:name="com.spyou.sozo_manga.MainActivityGreen"
             android:enabled="false"
             android:exported="true"
-            android:icon="@mipmap/ic_launcher_green"
+            android:icon="@mipmap/ic_launcher"
             android:roundIcon="@mipmap/ic_launcher_green"
             android:label="Sozo Read"
             android:targetActivity=".MainActivity">
@@ -112,7 +112,7 @@
             android:name="com.spyou.sozo_manga.MainActivityPurple"
             android:enabled="false"
             android:exported="true"
-            android:icon="@mipmap/ic_launcher_purple"
+            android:icon="@mipmap/ic_launcher"
             android:roundIcon="@mipmap/ic_launcher_purple"
             android:label="Sozo Read"
             android:targetActivity=".MainActivity">

@@ -159,11 +159,15 @@ class _SozoReadAppState extends State<SozoReadApp> with WidgetsBindingObserver {
       value: sl<ThemeCubit>(),
       child: BlocBuilder<ThemeCubit, ThemeSettings>(
         builder: (context, theme) {
+          // Light mode is disabled for v1 — the light palette hasn't been
+          // polished yet. Hardcoding ThemeMode.dark ignores both the cubit's
+          // saved value and the system theme. Remove this override (revert to
+          // `themeMode: theme.mode`) once Light is ready to ship.
           return MaterialApp.router(
             title: 'Sozo Read',
             theme: AppTheme.buildLight(theme.accent),
             darkTheme: AppTheme.buildDark(theme.accent),
-            themeMode: theme.mode,
+            themeMode: ThemeMode.dark,
             debugShowCheckedModeBanner: false,
             routerConfig: _router,
           );

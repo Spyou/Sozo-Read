@@ -69,6 +69,12 @@ dependencies:
   # System share sheet for sozoread:// deep links from the detail screen.
   share_plus: ^10.1.4
 
+  # Keep the screen on while the manga reader is mounted.
+  wakelock_plus: ^1.2.10
+
+  # Save individual manga panels to the device gallery via long-press.
+  saver_gallery: ^4.0.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -78,6 +84,22 @@ dev_dependencies:
 
   # Native splash screen generator.
   flutter_native_splash: ^2.4.4
+
+  # Native launcher-icon generator (Android mipmaps + iOS AppIcon set).
+  flutter_launcher_icons: ^0.14.4
+
+flutter_launcher_icons:
+  android: "ic_launcher"
+  ios: true
+  image_path: "assets/branding/sozo_new_logo.png"
+  # Adaptive icon disabled. Using the new-logo PNG as the foreground left
+  # ~33% of the launcher mask as black padding because Android crops the
+  # outer safe-zone of adaptive foregrounds. The legacy bitmap fills the
+  # mask cleanly. Re-enable when we have a foreground specifically
+  # authored with safe-zone padding (logo at ~150% canvas size so it
+  # survives the inner-66% crop).
+  min_sdk_android: 21
+  remove_alpha_ios: true
 
 flutter:
   uses-material-design: true
@@ -98,5 +120,6 @@ flutter:
     - assets/branding/sozo_logo_blue.png
     - assets/branding/sozo_logo_green.png
     - assets/branding/sozo_logo_purple.png
+    - assets/branding/sozo_new_logo.png
     - assets/splash/sozo_read_wordmark.png
     - assets/splash/sozo_read_wordmark_transparent.png

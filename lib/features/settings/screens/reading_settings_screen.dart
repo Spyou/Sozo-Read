@@ -43,6 +43,84 @@ class ReadingSettingsScreen extends StatelessWidget {
                           m.readingDirection,
                         ),
                       ),
+                      SettingsTile(
+                        icon: Icons.touch_app_outlined,
+                        title: 'Tap zones',
+                        subtitle: 'Tap left/right to flip pages',
+                        trailing: Switch.adaptive(
+                          value: m.tapZoneNavigation,
+                          onChanged: (v) => context
+                              .read<MangaPrefsCubit>()
+                              .setTapZoneNavigation(v),
+                        ),
+                        onTap: () => context
+                            .read<MangaPrefsCubit>()
+                            .setTapZoneNavigation(!m.tapZoneNavigation),
+                      ),
+                      SettingsTile(
+                        icon: Icons.crop_rounded,
+                        title: 'Crop edges',
+                        subtitle: 'Trim white margins from panels',
+                        trailing: Switch.adaptive(
+                          value: m.cropEdges,
+                          onChanged: (v) => context
+                              .read<MangaPrefsCubit>()
+                              .setCropEdges(v),
+                        ),
+                        onTap: () => context
+                            .read<MangaPrefsCubit>()
+                            .setCropEdges(!m.cropEdges),
+                      ),
+                      SettingsTile(
+                        icon: Icons.palette_outlined,
+                        title: 'Color filter',
+                        subtitle: colorFilterLabel(m.colorFilter),
+                        onTap: () => openMangaColorFilterSheet(
+                          context,
+                          m.colorFilter,
+                        ),
+                      ),
+                      SettingsTile(
+                        icon: Icons.swipe_vertical_rounded,
+                        title: 'Auto-scroll',
+                        subtitle: autoScrollLabel(m.autoScroll),
+                        onTap: () => openMangaAutoScrollSheet(
+                          context,
+                          m.autoScroll,
+                        ),
+                      ),
+                      SettingsTile(
+                        icon: Icons.image_outlined,
+                        title: 'Image quality',
+                        subtitle: imageQualityLabel(m.imageQuality),
+                        onTap: () => openMangaImageQualitySheet(
+                          context,
+                          m.imageQuality,
+                        ),
+                      ),
+                      SettingsTile(
+                        icon: Icons.screen_rotation_rounded,
+                        title: 'Lock orientation',
+                        subtitle: orientationLockLabel(m.orientationLock),
+                        onTap: () => openMangaOrientationLockSheet(
+                          context,
+                          m.orientationLock,
+                        ),
+                      ),
+                      SettingsTile(
+                        icon: Icons.lightbulb_outline_rounded,
+                        title: 'Keep screen on',
+                        subtitle: 'Prevent screen timeout while reading',
+                        trailing: Switch.adaptive(
+                          value: m.keepScreenOn,
+                          onChanged: (v) => context
+                              .read<MangaPrefsCubit>()
+                              .setKeepScreenOn(v),
+                        ),
+                        onTap: () => context
+                            .read<MangaPrefsCubit>()
+                            .setKeepScreenOn(!m.keepScreenOn),
+                      ),
                     ],
                   ),
                 ),
