@@ -1,10 +1,12 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/di/injection.dart';
+import '../../../../core/models/book_item.dart';
 import '../../../../core/repository/downloads_repository.dart';
 import '../../../../core/repository/library_repository.dart';
 import '../../../../core/repository/provider_repository.dart';
 import '../../../../core/repository/read_chapters_repository.dart';
+import '../../../../core/state/auth_service.dart';
 import 'novel_reader_event.dart';
 import 'novel_reader_state.dart';
 
@@ -30,19 +32,71 @@ class NovelReaderBloc extends Bloc<NovelReaderEvent, NovelReaderState> {
 
   Future<void> _onStarted(NovelReaderStarted event, Emitter<NovelReaderState> emit) async {
     emit(state.copyWith(book: event.book, chapterIndex: event.chapterIndex, progress: 0));
-    final entry = _library.get(event.book.sourceId, event.book.id);
+    var entry = _library.get(event.book.sourceId, event.book.id);
+
+    // Auto-save: if the book isn't already in the library AND the user
+    // is signed in, save it as Reading on first chapter open. Matches
+    // the manga reader's behaviour so Continue-Reading + Library
+    // populate without an extra tap. Signed-out users hit the explicit
+    // bookmark gate on the detail screen.
+    if (entry == null && sl<AuthService>().isSignedIn) {
+      final item = BookItem(
+        id: event.book.id,
+        title: event.book.title,
+        cover: event.book.cover,
+        url: event.book.url,
+        type: event.book.type,
+        sourceId: event.book.sourceId,
+      );
+      entry = await _library.add(item);
+    }
+
     final resume = (entry != null &&
             entry.lastChapterIndex == event.chapterIndex &&
             (entry.lastChapterProgress ?? 0) > 0 &&
             (entry.lastChapterProgress ?? 0) < 1)
         ? entry.lastChapterProgress
         : null;
+    // Promote planning/on-hold -> reading so the book shows up in the
+    // Library Reading tab + Home Continue-Reading row. Completed stays.
+    if (entry != null &&
+        entry.status != LibraryStatus.reading &&
+        entry.status != LibraryStatus.completed) {
+      // ignore: discarded_futures
+      _library.setStatus(
+        event.book.sourceId,
+        event.book.id,
+        LibraryStatus.reading,
+      );
+    }
     await _fetch(emit, pendingResume: resume);
   }
 
   Future<void> _onChapterChanged(NovelReaderChapterChanged event, Emitter<NovelReaderState> emit) async {
-    if (state.book == null) return;
-    final i = event.chapterIndex.clamp(0, state.book!.chapters.length - 1);
+    final book = state.book;
+    if (book == null) return;
+    final i = event.chapterIndex.clamp(0, book.chapters.length - 1);
+
+    // Tapping Next/Prev is a strong "I finished this one" signal — much
+    // more reliable than scrolling past 99% of a page that has ads /
+    // comments / extra UI past the actual chapter end. Mark the previous
+    // chapter as read before we switch. We only consider it "finished"
+    // if the user had at least some progress on it (avoids marking
+    // chapters they barely opened).
+    if (state.chapterIndex >= 0 &&
+        state.chapterIndex < book.chapters.length &&
+        state.chapterIndex != i &&
+        state.progress > 0.4) {
+      final prev = book.chapters[state.chapterIndex];
+      final prevKey = '${book.sourceId}::${book.id}::${prev.id}';
+      if (_lastMarkedChapterKey != prevKey) {
+        _lastMarkedChapterKey = prevKey;
+        // ignore: discarded_futures
+        sl<ReadChaptersRepository>().mark(book.sourceId, book.id, prev.id);
+      }
+    }
+
+    // Reset guard so the next chapter's own end-of-content mark can fire.
     _lastMarkedChapterKey = null;
     emit(state.copyWith(chapterIndex: i, progress: 0, clearResume: true));
     await _fetch(emit);
@@ -63,8 +117,12 @@ class NovelReaderBloc extends Bloc<NovelReaderEvent, NovelReaderState> {
       chapterIndex: state.chapterIndex,
       chapterProgress: event.progress,
     );
-    // Mark chapter as read once the user scrolls past 99% of the content.
-    if (event.progress >= 0.99 &&
+    // Mark as read once the user crosses 85% of the scrollable area.
+    // 99% was too strict — novel pages have ads / comments / extra UI
+    // past the actual chapter text, so users naturally stop scrolling
+    // well before the absolute bottom. 85% is a good "they read the
+    // content" threshold without false positives from a quick skim.
+    if (event.progress >= 0.85 &&
         state.chapterIndex >= 0 &&
         state.chapterIndex < book.chapters.length) {
       final ch = book.chapters[state.chapterIndex];

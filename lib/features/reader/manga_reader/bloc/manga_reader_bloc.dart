@@ -3,11 +3,13 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/di/injection.dart';
+import '../../../../core/models/book_item.dart';
 import '../../../../core/models/page_content.dart';
 import '../../../../core/repository/downloads_repository.dart';
 import '../../../../core/repository/library_repository.dart';
 import '../../../../core/repository/provider_repository.dart';
 import '../../../../core/repository/read_chapters_repository.dart';
+import '../../../../core/state/auth_service.dart';
 import 'manga_reader_event.dart';
 import 'manga_reader_state.dart';
 
@@ -46,13 +48,44 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
     ));
     // Honour saved progress only if the user is opening the *same* chapter
     // the library entry remembers.
-    final entry = _library.get(event.book.sourceId, event.book.id);
+    var entry = _library.get(event.book.sourceId, event.book.id);
+
+    // Auto-save: if the book isn't in the library yet AND the user is
+    // signed in, create an entry with status=Reading on first chapter
+    // open. Mirrors Tachiyomi / Webnovel behaviour — opening a chapter
+    // is an implicit "I want to read this." Signed-out users still get
+    // gated at the explicit bookmark button on the detail screen.
+    if (entry == null && sl<AuthService>().isSignedIn) {
+      final item = BookItem(
+        id: event.book.id,
+        title: event.book.title,
+        cover: event.book.cover,
+        url: event.book.url,
+        type: event.book.type,
+        sourceId: event.book.sourceId,
+      );
+      entry = await _library.add(item);
+    }
+
     final resume = (entry != null &&
             entry.lastChapterIndex == event.chapterIndex &&
             (entry.lastChapterProgress ?? 0) > 0 &&
             (entry.lastChapterProgress ?? 0) < 1)
         ? entry.lastChapterProgress
         : null;
+    // Promote planning / on-hold -> reading so the book shows up in the
+    // Library "Reading" tab + Home Continue-Reading row. Completed books
+    // are left alone — re-reading a finished book shouldn't demote it.
+    if (entry != null &&
+        entry.status != LibraryStatus.reading &&
+        entry.status != LibraryStatus.completed) {
+      // ignore: discarded_futures
+      _library.setStatus(
+        event.book.sourceId,
+        event.book.id,
+        LibraryStatus.reading,
+      );
+    }
     await _fetchPages(emit, pendingResume: resume);
     _prefetchNext();
   }

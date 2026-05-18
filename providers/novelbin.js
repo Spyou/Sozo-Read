@@ -74,6 +74,13 @@ function _parseListing(html) {
     var coverM = snippet.match(/data-src="(https?:\/\/[^"]+\.(?:jpg|jpeg|png|webp))"/i);
     if (!coverM) coverM = snippet.match(/<img[^>]+src="(https?:\/\/[^"]+\.(?:jpg|jpeg|png|webp))"/i);
     var cover = coverM ? coverM[1] : null;
+    // NovelBin's listing markup points at the /novel_80_113/ thumbnail
+    // (80x113 px) which is way too small for the home grid and renders
+    // visibly blurry. The full-res variant lives at /novel/<slug>.jpg —
+    // same CDN, no resize prefix.
+    if (cover) {
+      cover = cover.replace(/\/novel_\d+_\d+\//, '/novel/');
+    }
 
     results.push({
       id: _idFromUrl(link),

@@ -4,9 +4,11 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
 import '../../../core/di/injection.dart';
 import '../../../core/models/book_item.dart';
+import '../../../core/repository/library_repository.dart';
 import '../../../core/state/active_source_cubit.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/source_picker.dart';
@@ -145,13 +147,33 @@ class _HomeViewState extends State<_HomeView> {
                         )
                       else if (state.status == HomeStatus.loading)
                         const SliverToBoxAdapter(child: FeaturedCarouselSkeleton()),
-                      if (state.continueReading.isNotEmpty)
-                        SliverToBoxAdapter(
-                          child: ContinueReadingRow(
-                            entries: state.continueReading,
-                            onTap: (b) => _openDetail(context, b),
-                          ),
+                      // Continue Reading reads directly from the
+                      // LibraryRepository box rather than going through the
+                      // HomeBloc state. The bloc is a singleton so its
+                      // watch subscription can outlive the Hive box's
+                      // event stream after long idle periods. Listening
+                      // to the box itself guarantees the row reflects
+                      // the latest saved/promoted books on every change.
+                      SliverToBoxAdapter(
+                        child: ValueListenableBuilder<Box<Map>>(
+                          valueListenable:
+                              Hive.box<Map>(LibraryRepository.boxName)
+                                  .listenable(),
+                          builder: (_, _, _) {
+                            final entries = sl<LibraryRepository>()
+                                .byStatus(LibraryStatus.reading)
+                              ..sort((a, b) =>
+                                  b.updatedAt.compareTo(a.updatedAt));
+                            final capped = entries.length > 12
+                                ? entries.sublist(0, 12)
+                                : entries;
+                            return ContinueReadingRow(
+                              entries: capped,
+                              onTap: (b) => _openDetail(context, b),
+                            );
+                          },
                         ),
+                      ),
                       for (final s in state.sections)
                         SliverToBoxAdapter(
                           child: SectionRow(

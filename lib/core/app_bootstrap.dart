@@ -11,6 +11,7 @@ import 'provider/provider_downloader.dart';
 import 'provider/provider_registry.dart';
 import 'repository/downloads_repository.dart';
 import 'repository/library_repository.dart';
+import 'repository/provider_repository.dart';
 import 'repository/read_chapters_repository.dart';
 import 'services/notification_service.dart';
 import 'state/active_source_cubit.dart';
@@ -90,5 +91,18 @@ Future<void> loadBundledProviders(List<String> names) async {
       // ignore: avoid_print
       print('[bootstrap] FAILED to load $name: $e\n$st');
     }
+  }
+  // Pre-warm each provider's metadata cache so the source picker can read
+  // from cache instead of queueing behind whatever JS calls Home is doing.
+  // Failures here are non-fatal — the picker falls back to its async path.
+  // ignore: discarded_futures
+  _prewarmProviderInfo();
+}
+
+Future<void> _prewarmProviderInfo() async {
+  for (final p in sl<ProviderRepository>().providers) {
+    try {
+      await p.getInfo();
+    } catch (_) {/* tolerated */}
   }
 }

@@ -245,11 +245,21 @@ class JsProvider implements BaseProvider {
   Future<String> _call(String method, List<Object?> args) =>
       _host.call(sourceId, method, args);
 
+  /// Provider metadata is invariant across the app's lifetime (it's just
+  /// the JS file's getInfo() return value), so cache it. Without this the
+  /// source picker waits behind every active JS call — opening it while
+  /// Home is loading 1000+ chapters made it look frozen.
+  ProviderInfo? _infoCache;
+
   @override
   Future<ProviderInfo> getInfo() async {
+    final cached = _infoCache;
+    if (cached != null) return cached;
     final raw = await _call('getInfo', const []);
     final map = jsonDecode(raw) as Map<String, dynamic>;
-    return ProviderInfo.fromJson(map);
+    final info = ProviderInfo.fromJson(map);
+    _infoCache = info;
+    return info;
   }
 
   @override
