@@ -8,7 +8,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 /// [anilistClientId] below. The implicit-grant flow puts the access token in
 /// the URL **fragment** (after `#`) of the redirect, not the query string —
 /// see [AniListAuth.handleCallback].
-const String anilistClientId = '__REPLACE_ME__';
+const String anilistClientId = '41817';
 
 /// Custom-scheme redirect URI registered with the OS for AniList callbacks.
 const String anilistRedirectUri = 'sozoread://oauth/anilist';
@@ -20,7 +20,7 @@ const String _tokenKey = 'anilist_access_token';
 /// helper to build the authorize URL and to parse the OAuth callback.
 class AniListAuth {
   AniListAuth({FlutterSecureStorage? storage})
-      : _storage = storage ?? const FlutterSecureStorage();
+    : _storage = storage ?? const FlutterSecureStorage();
 
   final FlutterSecureStorage _storage;
 

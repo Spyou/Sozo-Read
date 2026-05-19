@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/di/injection.dart';
 import '../../../core/repository/tracker_repository.dart';
@@ -24,23 +25,67 @@ class _TrackersSettingsScreenState extends State<TrackersSettingsScreen>
     with WidgetsBindingObserver {
   TrackerRepository get _repo => sl<TrackerRepository>();
 
+  /// Tracker IDs the user has just tapped Connect on. Used to show a
+  /// "Completing sign-in…" indicator until the OAuth round-trip lands and
+  /// [Tracker.authChanges] fires.
+  final Set<String> _connecting = <String>{};
+
+  /// Per-tracker previous `isAuthenticated` value, so we can detect a
+  /// transition into "logged in" and show a success snackbar.
+  late final Map<String, bool> _wasAuthed;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _wasAuthed = {
+      for (final t in _repo.trackers) t.id: t.isAuthenticated,
+    };
+    for (final tracker in _repo.trackers) {
+      tracker.authChanges.addListener(_onTrackerAuthChanged);
+    }
   }
 
   @override
   void dispose() {
+    for (final tracker in _repo.trackers) {
+      tracker.authChanges.removeListener(_onTrackerAuthChanged);
+    }
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
+  void _onTrackerAuthChanged() {
+    if (!mounted) return;
+    // Walk every tracker to spot the one whose state flipped — fire the
+    // user-facing snackbar only on the false → true transition. The
+    // notifier doesn't tell us WHICH tracker fired, so we diff.
+    for (final tracker in _repo.trackers) {
+      final before = _wasAuthed[tracker.id] ?? false;
+      final now = tracker.isAuthenticated;
+      if (now && !before) {
+        // Successful connect — clear the "connecting" indicator and
+        // celebrate. Username may still be in-flight; the row will
+        // re-render again when the next authChanges fires.
+        _connecting.remove(tracker.id);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Connected to ${tracker.displayName}'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+      _wasAuthed[tracker.id] = now;
+    }
+    setState(() {});
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // On returning from the browser the deep-link handler may have just
-    // captured a token — rebuild to reflect the freshly authenticated
-    // tracker without making the user pull-to-refresh.
+    // Safety net: if the deep-link path failed for some reason but the
+    // app resumed after the browser handed control back, force a rebuild
+    // so any pending "Completing sign-in…" indicator clears once the
+    // user's been gone long enough to assume the flow didn't complete.
     if (state == AppLifecycleState.resumed) {
       if (mounted) setState(() {});
     }
@@ -48,20 +93,19 @@ class _TrackersSettingsScreenState extends State<TrackersSettingsScreen>
 
   Future<void> _onConnect(Tracker tracker) async {
     final messenger = ScaffoldMessenger.of(context);
-    messenger.showSnackBar(
-      const SnackBar(
-        content: Text('Opening browser…'),
-        duration: Duration(seconds: 2),
-      ),
-    );
+    setState(() => _connecting.add(tracker.id));
     try {
       await tracker.startLogin();
     } catch (e) {
       if (!mounted) return;
+      setState(() => _connecting.remove(tracker.id));
       messenger.showSnackBar(
         SnackBar(content: Text("Couldn't open browser: $e")),
       );
     }
+    // We DON'T clear _connecting here on success — wait for the OAuth
+    // round-trip to land in [_onTrackerAuthChanged]. If the user cancels
+    // and never completes, the next foreground / Connect tap clears it.
   }
 
   Future<void> _onDisconnect(Tracker tracker) async {
@@ -100,6 +144,19 @@ class _TrackersSettingsScreenState extends State<TrackersSettingsScreen>
       appBar: AppBar(
         title: const Text('Trackers'),
         centerTitle: true,
+        // Custom back so a cold-start OAuth callback (which lands the user
+        // directly on this screen with no navigator stack underneath) still
+        // has a working back gesture — falls back to /settings.
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              context.go('/settings');
+            }
+          },
+        ),
       ),
       body: ListView(
         children: [
@@ -109,6 +166,7 @@ class _TrackersSettingsScreenState extends State<TrackersSettingsScreen>
               for (final tracker in trackers)
                 _TrackerRow(
                   tracker: tracker,
+                  connecting: _connecting.contains(tracker.id),
                   onConnect: () => _onConnect(tracker),
                   onDisconnect: () => _onDisconnect(tracker),
                 ),
@@ -174,11 +232,17 @@ class _TrackersHeaderCard extends StatelessWidget {
 class _TrackerRow extends StatelessWidget {
   const _TrackerRow({
     required this.tracker,
+    required this.connecting,
     required this.onConnect,
     required this.onDisconnect,
   });
 
   final Tracker tracker;
+
+  /// True while the OAuth round-trip is in flight — the row swaps the
+  /// trailing button for a spinner + "Completing sign-in…" subtitle so
+  /// the user knows the app is waiting on the browser callback.
+  final bool connecting;
   final VoidCallback onConnect;
   final VoidCallback onDisconnect;
 
@@ -200,7 +264,9 @@ class _TrackerRow extends StatelessWidget {
     final authed = tracker.isAuthenticated;
     final subtitle = authed
         ? 'Signed in as ${tracker.currentUserName ?? "—"}'
-        : 'Not connected';
+        : connecting
+            ? 'Completing sign-in…'
+            : 'Not connected';
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -248,6 +314,18 @@ class _TrackerRow extends StatelessWidget {
               child: const Text(
                 'Disconnect',
                 style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+            )
+          else if (connecting)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.2,
+                  color: AppColors.primary,
+                ),
               ),
             )
           else

@@ -19,6 +19,7 @@ import '../services/cloudinary_service.dart';
 import '../services/notification_service.dart';
 import '../state/active_source_cubit.dart';
 import '../state/auth_service.dart';
+import '../state/chapter_sort_cubit.dart';
 import '../state/manga_prefs_cubit.dart';
 import '../state/notifications_prefs_cubit.dart';
 import '../state/novel_prefs_cubit.dart';
@@ -62,6 +63,7 @@ Future<void> configureDependencies() async {
   sl.registerLazySingleton<ThemeCubit>(() => ThemeCubit());
   sl.registerLazySingleton<NovelPrefsCubit>(() => NovelPrefsCubit());
   sl.registerLazySingleton<MangaPrefsCubit>(() => MangaPrefsCubit());
+  sl.registerLazySingleton<ChapterSortCubit>(() => ChapterSortCubit());
   sl.registerLazySingleton<AuthService>(() => AuthService());
   sl.registerLazySingleton<CloudinaryService>(
     () => CloudinaryService(dio: sl()),

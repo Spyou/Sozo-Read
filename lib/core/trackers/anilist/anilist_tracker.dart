@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../tracker.dart';
@@ -25,6 +26,17 @@ class AniListTracker implements Tracker {
   /// by the [Tracker] contract.
   bool _hasToken = false;
 
+  /// Bumped on every auth-state transition so UI surfaces can listen and
+  /// rebuild without polling. See [Tracker.authChanges].
+  final ValueNotifier<int> _authChanges = ValueNotifier<int>(0);
+
+  @override
+  ValueListenable<int> get authChanges => _authChanges;
+
+  void _notifyAuthChanged() {
+    _authChanges.value = _authChanges.value + 1;
+  }
+
   /// One-shot startup hook: reads the cached token (if any) and tries to
   /// resolve it into a viewer so [currentUserName] is populated for the
   /// first frame the UI renders. Safe to call multiple times — it just
@@ -34,6 +46,7 @@ class AniListTracker implements Tracker {
     _hasToken = token != null && token.isNotEmpty;
     if (!_hasToken) {
       _cachedUserName = null;
+      _notifyAuthChanged();
       return;
     }
     final viewer = await api.fetchViewer();
@@ -41,9 +54,11 @@ class AniListTracker implements Tracker {
       // Token is stale or rejected — treat as logged out.
       _hasToken = false;
       _cachedUserName = null;
+      _notifyAuthChanged();
       return;
     }
     _cachedUserName = viewer.name;
+    _notifyAuthChanged();
   }
 
   @override
@@ -70,9 +85,14 @@ class AniListTracker implements Tracker {
     final ok = await auth.handleCallback(uri);
     if (!ok) return false;
     _hasToken = true;
+    // Notify immediately so any waiting UI ("Completing sign-in…") can
+    // transition out of the in-progress state right away — without
+    // waiting for the viewer fetch round-trip.
+    _notifyAuthChanged();
     // Refresh the viewer so the username is available immediately.
     final viewer = await api.fetchViewer();
     _cachedUserName = viewer?.name;
+    _notifyAuthChanged();
     return true;
   }
 
@@ -81,6 +101,7 @@ class AniListTracker implements Tracker {
     await auth.clearToken();
     _hasToken = false;
     _cachedUserName = null;
+    _notifyAuthChanged();
   }
 
   @override

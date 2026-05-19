@@ -72,6 +72,7 @@ class AniListApi {
             title { romaji english native }
             coverImage { medium }
             chapters
+            status
             mediaListEntry {
               status
               progress
@@ -111,6 +112,7 @@ class AniListApi {
             title { romaji english native }
             coverImage { medium }
             chapters
+            status
           }
         }
       }
@@ -280,6 +282,7 @@ class AniListApi {
     final cover =
         (media['coverImage'] as Map<String, dynamic>?)?['medium'] as String?;
     final chapters = media['chapters'] as int? ?? 0;
+    final seriesStatus = _seriesStatusFromRemote(media['status'] as String?);
 
     final listEntry = media['mediaListEntry'] as Map<String, dynamic>?;
 
@@ -309,6 +312,7 @@ class AniListApi {
       totalChapters: chapters,
       score: score,
       updatedAt: updatedAt,
+      seriesStatus: seriesStatus,
     );
   }
 
@@ -321,6 +325,7 @@ class AniListApi {
     final cover =
         (media['coverImage'] as Map<String, dynamic>?)?['medium'] as String?;
     final chapters = media['chapters'] as int? ?? 0;
+    final seriesStatus = _seriesStatusFromRemote(media['status'] as String?);
 
     final status = _statusFromRemote(entry['status'] as String?);
     final progress = entry['progress'] as int? ?? 0;
@@ -345,7 +350,26 @@ class AniListApi {
       totalChapters: chapters,
       score: score,
       updatedAt: updatedAt,
+      seriesStatus: seriesStatus,
     );
+  }
+
+  /// Maps AniList's `MediaStatus` enum into our internal release status.
+  SeriesReleaseStatus _seriesStatusFromRemote(String? raw) {
+    switch (raw) {
+      case 'FINISHED':
+        return SeriesReleaseStatus.finished;
+      case 'RELEASING':
+        return SeriesReleaseStatus.releasing;
+      case 'NOT_YET_RELEASED':
+        return SeriesReleaseStatus.notYetReleased;
+      case 'CANCELLED':
+        return SeriesReleaseStatus.cancelled;
+      case 'HIATUS':
+        return SeriesReleaseStatus.hiatus;
+      default:
+        return SeriesReleaseStatus.unknown;
+    }
   }
 
   /// Picks the best-available human-readable title from AniList's

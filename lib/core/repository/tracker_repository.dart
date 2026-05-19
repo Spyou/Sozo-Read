@@ -200,6 +200,65 @@ class TrackerRepository {
   /// Errors are swallowed via [debugPrint]. The returned future completes
   /// immediately after scheduling work — callers should NOT await it. The
   /// inner `Future.wait` runs to completion in the background.
+  /// Called when the user OPENS a series in the reader. Ensures the series
+  /// is auto-matched on every linked tracker and, if its remote status is
+  /// missing / planToRead / onHold / dropped, promotes it to `reading` so it
+  /// appears on the user's tracker reading list right away — without
+  /// waiting for them to finish a chapter.
+  ///
+  /// Idempotent and respectful: existing `reading` / `completed` /
+  /// `rereading` statuses are left untouched. Errors are swallowed via
+  /// [debugPrint] — never throws.
+  Future<void> pushReadingStarted({
+    required String sourceId,
+    required String bookId,
+    required String localTitle,
+  }) async {
+    await ensureMatched(
+      sourceId: sourceId,
+      bookId: bookId,
+      localTitle: localTitle,
+    );
+    final matches = matchesFor(sourceId, bookId);
+    if (matches.isEmpty) {
+      debugPrint(
+        'TrackerRepository.pushReadingStarted: no match for $sourceId/$bookId '
+        '— auto-match either failed or no tracker authed.',
+      );
+      return;
+    }
+    for (final match in matches) {
+      final tracker = trackerById(match.trackerId);
+      if (tracker == null || !tracker.isAuthenticated) continue;
+      try {
+        final remote = await tracker.fetchEntry(match.remoteId);
+        final needsPromotion = remote == null ||
+            remote.status == TrackerStatus.planToRead ||
+            remote.status == TrackerStatus.onHold ||
+            remote.status == TrackerStatus.dropped;
+        if (needsPromotion) {
+          debugPrint(
+            'TrackerRepository.pushReadingStarted: promoting ${tracker.id} '
+            'entry ${match.remoteId} to reading',
+          );
+          await tracker.updateEntry(
+            remoteId: match.remoteId,
+            status: TrackerStatus.reading,
+          );
+        } else {
+          debugPrint(
+            'TrackerRepository.pushReadingStarted: ${tracker.id} entry '
+            '${match.remoteId} already in ${remote.status.label} — leaving alone',
+          );
+        }
+      } catch (e) {
+        debugPrint(
+          'TrackerRepository.pushReadingStarted[${tracker.id}] error: $e',
+        );
+      }
+    }
+  }
+
   Future<void> pushProgress({
     required String sourceId,
     required String bookId,
@@ -207,13 +266,23 @@ class TrackerRepository {
   }) async {
     if (chapterNumber <= 0) return;
     final matches = matchesFor(sourceId, bookId);
-    if (matches.isEmpty) return;
+    if (matches.isEmpty) {
+      debugPrint(
+        'TrackerRepository.pushProgress: no match for $sourceId/$bookId '
+        '(auto-match may still be running or has failed). Skipping.',
+      );
+      return;
+    }
 
     final ops = <Future<void>>[];
     for (final match in matches) {
       final tracker = trackerById(match.trackerId);
       if (tracker == null) continue;
       if (!tracker.isAuthenticated) continue;
+      debugPrint(
+        'TrackerRepository.pushProgress: ${tracker.id} '
+        'remoteId=${match.remoteId} progress=$chapterNumber',
+      );
       ops.add(_pushOne(tracker, match, chapterNumber));
     }
     if (ops.isEmpty) return;
@@ -237,9 +306,53 @@ class TrackerRepository {
         remoteId: match.remoteId,
         progress: progress,
       );
+      await _maybeAutoComplete(tracker, match, progress);
     } catch (e, st) {
       debugPrint(
         'TrackerRepository.pushProgress[${tracker.id}] error: $e\n$st',
+      );
+    }
+  }
+
+  /// After a successful progress push, check whether the user has now read
+  /// every chapter of a series the remote service considers FINISHED (or
+  /// CANCELLED) — if so, flip their status to Completed automatically.
+  ///
+  /// We deliberately don't auto-complete still-RELEASING series: hitting
+  /// the latest released chapter just means the user is caught up, not
+  /// finished. Same for HIATUS / NOT_YET_RELEASED. Also leaves the entry
+  /// alone if the user is in Rereading or has already manually completed
+  /// it — respects manual choices.
+  Future<void> _maybeAutoComplete(
+    Tracker tracker,
+    TrackerMatch match,
+    int progress,
+  ) async {
+    try {
+      final remote = await tracker.fetchEntry(match.remoteId);
+      if (remote == null) return;
+      final isFinishedSeries =
+          remote.seriesStatus == SeriesReleaseStatus.finished ||
+              remote.seriesStatus == SeriesReleaseStatus.cancelled;
+      if (!isFinishedSeries) return;
+      if (remote.totalChapters <= 0) return;
+      if (progress < remote.totalChapters) return;
+      if (remote.status == TrackerStatus.completed ||
+          remote.status == TrackerStatus.rereading) {
+        return;
+      }
+      debugPrint(
+        'TrackerRepository.autoComplete: ${tracker.id} '
+        'remoteId=${match.remoteId} (read $progress/${remote.totalChapters} '
+        'of a ${remote.seriesStatus.name} series) → status=completed',
+      );
+      await tracker.updateEntry(
+        remoteId: match.remoteId,
+        status: TrackerStatus.completed,
+      );
+    } catch (e, st) {
+      debugPrint(
+        'TrackerRepository._maybeAutoComplete[${tracker.id}] error: $e\n$st',
       );
     }
   }

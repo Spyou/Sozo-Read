@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import 'tracker_entry.dart';
 
 /// Abstract tracker interface — one implementation per remote service
@@ -23,6 +25,12 @@ abstract class Tracker {
   /// Returns the AUTHENTICATED user's display name once logged in, or
   /// `null` if not. Cheap — implementations should cache after first call.
   String? get currentUserName;
+
+  /// Fires whenever [isAuthenticated] / [currentUserName] change. The UI
+  /// (settings screen, detail-screen pill) listens on this to rebuild the
+  /// moment the OAuth round-trip finishes — without polling. The integer
+  /// value just increments; consumers should only care that it changed.
+  ValueListenable<int> get authChanges;
 
   /// Kicks off the OAuth flow by opening the system browser. The actual
   /// token is received via the deep-link callback path and routed back to

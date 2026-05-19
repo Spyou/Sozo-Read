@@ -7,7 +7,6 @@ import '../../../../core/repository/library_repository.dart';
 import '../../../../core/repository/provider_repository.dart';
 import '../../../../core/repository/read_chapters_repository.dart';
 import '../../../../core/repository/tracker_repository.dart';
-import '../../../../core/state/auth_service.dart';
 import 'novel_reader_event.dart';
 import 'novel_reader_state.dart';
 
@@ -35,12 +34,11 @@ class NovelReaderBloc extends Bloc<NovelReaderEvent, NovelReaderState> {
     emit(state.copyWith(book: event.book, chapterIndex: event.chapterIndex, progress: 0));
     var entry = _library.get(event.book.sourceId, event.book.id);
 
-    // Auto-save: if the book isn't already in the library AND the user
-    // is signed in, save it as Reading on first chapter open. Matches
-    // the manga reader's behaviour so Continue-Reading + Library
-    // populate without an extra tap. Signed-out users hit the explicit
-    // bookmark gate on the detail screen.
-    if (entry == null && sl<AuthService>().isSignedIn) {
+    // Auto-save: if the book isn't already in the library, add it as
+    // Reading on first chapter open. Matches the manga reader and
+    // populates Continue Reading + Library automatically. Sync-on-write
+    // catches up whenever the user signs in.
+    if (entry == null) {
       final item = BookItem(
         id: event.book.id,
         title: event.book.title,
@@ -52,23 +50,44 @@ class NovelReaderBloc extends Bloc<NovelReaderEvent, NovelReaderState> {
       entry = await _library.add(item);
     }
 
-    final resume = (entry != null &&
-            entry.lastChapterIndex == event.chapterIndex &&
+    // Auto-match + promote remote status to "reading" so the series lands
+    // on the user's tracker reading list right away. Fire-and-forget.
+    // ignore: discarded_futures
+    sl<TrackerRepository>().pushReadingStarted(
+      sourceId: event.book.sourceId,
+      bookId: event.book.id,
+      localTitle: event.book.title,
+    );
+
+    final resume = (entry.lastChapterIndex == event.chapterIndex &&
             (entry.lastChapterProgress ?? 0) > 0 &&
             (entry.lastChapterProgress ?? 0) < 1)
         ? entry.lastChapterProgress
         : null;
-    // Promote planning/on-hold -> reading so the book shows up in the
-    // Library Reading tab + Home Continue-Reading row. Completed stays.
-    if (entry != null &&
-        entry.status != LibraryStatus.reading &&
-        entry.status != LibraryStatus.completed) {
-      // ignore: discarded_futures
-      _library.setStatus(
+    // Promote to Reading whenever the user opens a chapter they haven't
+    // finished yet. Completed → Reading only when the opened chapter is
+    // unread (a new release dropping after the user completed the
+    // series); re-reading an already-finished chapter stays Completed.
+    if (entry.status != LibraryStatus.reading) {
+      final openingCh = event.book.chapters.isNotEmpty
+          ? event.book.chapters[event.chapterIndex]
+          : null;
+      final readIds = sl<ReadChaptersRepository>().getReadChapterIds(
         event.book.sourceId,
         event.book.id,
-        LibraryStatus.reading,
       );
+      final openingIsUnread =
+          openingCh != null && !readIds.contains(openingCh.id);
+      final shouldPromote = entry.status != LibraryStatus.completed ||
+          openingIsUnread;
+      if (shouldPromote) {
+        // ignore: discarded_futures
+        _library.setStatus(
+          event.book.sourceId,
+          event.book.id,
+          LibraryStatus.reading,
+        );
+      }
     }
     await _fetch(emit, pendingResume: resume);
   }
@@ -104,6 +123,17 @@ class NovelReaderBloc extends Bloc<NovelReaderEvent, NovelReaderState> {
           bookId: book.id,
           chapterNumber: prevNumber,
         );
+        // Novel chapter lists are oldest-first, so the latest chapter is
+        // at the END. Auto-mark the local library Completed when the
+        // user finishes that chapter.
+        if (state.chapterIndex == book.chapters.length - 1) {
+          // ignore: discarded_futures
+          _library.setStatus(
+            book.sourceId,
+            book.id,
+            LibraryStatus.completed,
+          );
+        }
       }
     }
 
@@ -149,6 +179,16 @@ class NovelReaderBloc extends Bloc<NovelReaderEvent, NovelReaderState> {
           bookId: book.id,
           chapterNumber: chapterNumber,
         );
+        // Local library auto-complete on the final chapter (oldest-first
+        // list, so the latest chapter is the last one).
+        if (state.chapterIndex == book.chapters.length - 1) {
+          // ignore: discarded_futures
+          _library.setStatus(
+            book.sourceId,
+            book.id,
+            LibraryStatus.completed,
+          );
+        }
       }
     }
   }

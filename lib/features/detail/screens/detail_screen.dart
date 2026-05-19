@@ -17,6 +17,7 @@ import '../../../core/repository/library_repository.dart';
 import '../../../core/repository/provider_repository.dart';
 import '../../../core/repository/read_chapters_repository.dart';
 import '../../../core/state/auth_service.dart';
+import '../../../core/state/chapter_sort_cubit.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/book_card.dart';
 import '../../../core/widgets/state_views.dart';
@@ -178,6 +179,16 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
   static const double _expandedHeight = 340;
   // Show the app-bar title once the user has scrolled past the cover.
   bool _showAppBarTitle = false;
+  // Tracker info is hidden by default — toggled on via the timeline icon
+  // in the app bar. Keeps the detail page un-cluttered for users who
+  // don't care about sync.
+  bool _showTracker = false;
+  // Chapter-list search state. Search field is hidden by default; tapping
+  // the magnifier toggles it. Query is local to the detail page lifetime —
+  // it resets the next time the user opens this screen.
+  final TextEditingController _chapterSearchController = TextEditingController();
+  bool _chapterSearchExpanded = false;
+  String _chapterSearchQuery = '';
 
   bool _onScroll(ScrollNotification n) {
     // Only react to vertical scrolls in the outer (header) viewport.
@@ -193,6 +204,7 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
   @override
   void dispose() {
     _tabController.dispose();
+    _chapterSearchController.dispose();
     super.dispose();
   }
 
@@ -213,6 +225,47 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
       pathParameters: {'sourceId': item.sourceId, 'bookId': item.id},
       extra: item,
     );
+  }
+
+  void _toggleChapterSearch() {
+    setState(() {
+      _chapterSearchExpanded = !_chapterSearchExpanded;
+      // Closing the search clears the query so the next open starts
+      // fresh and the chapter list is back to full.
+      if (!_chapterSearchExpanded) {
+        _chapterSearchController.clear();
+        _chapterSearchQuery = '';
+      }
+    });
+  }
+
+  /// Applies the current ascending/descending sort + search filter to
+  /// the book's chapters and returns the display list. Each entry knows
+  /// its original index so taps still map back to the bloc's
+  /// newest-first chapterIndex world.
+  List<({int originalIndex, Chapter chapter})> _buildChapterDisplay(
+    BookDetail book,
+    bool ascending,
+  ) {
+    final indexed = List.generate(
+      book.chapters.length,
+      (i) => (originalIndex: i, chapter: book.chapters[i]),
+    );
+    // Source returns chapters newest-first. Ascending = oldest-first, so
+    // we reverse the list. Descending keeps the source order.
+    final ordered =
+        ascending ? indexed.reversed.toList() : indexed;
+    final q = _chapterSearchQuery.trim().toLowerCase();
+    if (q.isEmpty) return ordered;
+    return ordered.where((e) {
+      final title = e.chapter.title.toLowerCase();
+      if (title.contains(q)) return true;
+      // Number-only match as a fallback (titles vary widely between
+      // sources; some don't include the chapter number at all).
+      final num = e.chapter.number;
+      if (num != null && num.toString().contains(q)) return true;
+      return false;
+    }).toList();
   }
 
   @override
@@ -254,6 +307,17 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
             ),
           ),
           actions: [
+            IconButton(
+              tooltip: _showTracker ? 'Hide tracker' : 'Show tracker',
+              icon: Icon(
+                _showTracker
+                    ? Icons.track_changes_rounded
+                    : Icons.track_changes_outlined,
+                color: Colors.white,
+              ),
+              onPressed: () =>
+                  setState(() => _showTracker = !_showTracker),
+            ),
             IconButton(
               tooltip: 'Share',
               icon: const Icon(
@@ -357,21 +421,19 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
                             ),
                   ),
                 ),
-                // Tracker status (AniList). Hidden when no tracker is
-                // connected, when no match has been found yet, or while the
-                // initial auto-match search is in flight. See the pill's
-                // own state machine for the full set of cases.
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
+                // Tracker card (AniList). Hidden by default — surfaces only
+                // when the user taps the timeline icon in the app bar.
+                // The card owns its own horizontal margins so this slot
+                // is left flush.
+                if (_showTracker)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
                     child: TrackerStatusPill(
                       sourceId: book.sourceId,
                       bookId: book.id,
                       localTitle: book.title,
                     ),
                   ),
-                ),
               ],
             ),
           ),
@@ -435,68 +497,105 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
                       ),
                     ],
                   )
-                : ListView.separated(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: EdgeInsets.zero,
-                    itemCount: book.chapters.length,
-                    separatorBuilder: (_, _) => const Divider(height: 1),
-                    itemBuilder: (_, i) {
-                      final Chapter ch = book.chapters[i];
-                      // A chapter is "finished" when either (a) the user
-                      // explicitly hit the end (tracked in
-                      // ReadChaptersRepository) or (b) progress has moved
-                      // past it via the library entry's lastChapterIndex.
-                      final read = widget.readChapterIds.contains(ch.id) ||
-                          i < lastChapterIndex;
-                      final titleStyle = TextStyle(
-                        color: read
-                            ? AppColors.textTertiary
-                            : AppColors.textPrimary,
-                        fontWeight: i == lastChapterIndex
-                            ? FontWeight.w600
-                            : FontWeight.w400,
-                      );
-                      final titleText = Text(
-                        ch.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: titleStyle,
-                      );
-                      return ListTile(
-                        dense: true,
-                        onTap: () => onOpenChapter(i),
-                        title: Opacity(
-                          opacity: read ? 0.5 : 1.0,
-                          child: titleText,
-                        ),
-                        subtitle: ch.date != null
-                            ? Opacity(
-                                opacity: read ? 0.5 : 1.0,
-                                child: Text(
-                                  ch.date!,
-                                  style: const TextStyle(
-                                    color: AppColors.textTertiary,
-                                    fontSize: 11,
-                                  ),
-                                ),
-                              )
-                            : null,
-                        trailing: SizedBox(
-                          width: 64,
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (i == lastChapterIndex)
-                                const Padding(
-                                  padding: EdgeInsets.only(right: 4),
-                                  child: Icon(Icons.play_circle,
-                                      color: AppColors.primary, size: 20),
-                                ),
-                              _ChapterDownloadButton(book: book, chapter: ch),
-                            ],
+                : BlocBuilder<ChapterSortCubit, bool>(
+                    bloc: sl<ChapterSortCubit>(),
+                    builder: (context, ascending) {
+                      final display = _buildChapterDisplay(book, ascending);
+                      return Column(
+                        children: [
+                          _ChapterListHeader(
+                            ascending: ascending,
+                            searchExpanded: _chapterSearchExpanded,
+                            searchController: _chapterSearchController,
+                            onToggleSort: () =>
+                                sl<ChapterSortCubit>().toggle(),
+                            onToggleSearch: _toggleChapterSearch,
+                            onSearchChanged: (v) =>
+                                setState(() => _chapterSearchQuery = v),
+                            filteredCount: display.length,
+                            totalCount: book.chapters.length,
                           ),
-                        ),
+                          Expanded(
+                            child: display.isEmpty
+                                ? const EmptyView(
+                                    icon: Icons.search_off_rounded,
+                                    message: 'No chapters match this search.',
+                                  )
+                                : ListView.separated(
+                                    physics:
+                                        const AlwaysScrollableScrollPhysics(),
+                                    padding: EdgeInsets.zero,
+                                    itemCount: display.length,
+                                    separatorBuilder: (_, _) =>
+                                        const Divider(height: 1),
+                                    itemBuilder: (_, displayIndex) {
+                                      final entry = display[displayIndex];
+                                      final i = entry.originalIndex;
+                                      final Chapter ch = entry.chapter;
+                                      final read = widget.readChapterIds
+                                              .contains(ch.id) ||
+                                          i < lastChapterIndex;
+                                      final titleStyle = TextStyle(
+                                        color: read
+                                            ? AppColors.textTertiary
+                                            : AppColors.textPrimary,
+                                        fontWeight: i == lastChapterIndex
+                                            ? FontWeight.w600
+                                            : FontWeight.w400,
+                                      );
+                                      final titleText = Text(
+                                        ch.title,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: titleStyle,
+                                      );
+                                      return ListTile(
+                                        dense: true,
+                                        onTap: () => onOpenChapter(i),
+                                        title: Opacity(
+                                          opacity: read ? 0.5 : 1.0,
+                                          child: titleText,
+                                        ),
+                                        subtitle: ch.date != null
+                                            ? Opacity(
+                                                opacity: read ? 0.5 : 1.0,
+                                                child: Text(
+                                                  ch.date!,
+                                                  style: const TextStyle(
+                                                    color:
+                                                        AppColors.textTertiary,
+                                                    fontSize: 11,
+                                                  ),
+                                                ),
+                                              )
+                                            : null,
+                                        trailing: SizedBox(
+                                          width: 64,
+                                          child: Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.end,
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              if (i == lastChapterIndex)
+                                                const Padding(
+                                                  padding: EdgeInsets.only(
+                                                      right: 4),
+                                                  child: Icon(
+                                                      Icons.play_circle,
+                                                      color:
+                                                          AppColors.primary,
+                                                      size: 20),
+                                                ),
+                                              _ChapterDownloadButton(
+                                                  book: book, chapter: ch),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                          ),
+                        ],
                       );
                     },
                   ),
@@ -517,6 +616,129 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
           ),
         ],
       ),
+      ),
+    );
+  }
+}
+
+/// Thin header strip sitting above the chapter list with a search-toggle
+/// icon on the left and a sort-toggle chip on the right.
+///
+/// Default state shows the chapter count + sort chip. Tapping the search
+/// icon swaps the left side for an inline text field that filters the
+/// list as the user types.
+class _ChapterListHeader extends StatelessWidget {
+  const _ChapterListHeader({
+    required this.ascending,
+    required this.searchExpanded,
+    required this.searchController,
+    required this.onToggleSort,
+    required this.onToggleSearch,
+    required this.onSearchChanged,
+    required this.filteredCount,
+    required this.totalCount,
+  });
+
+  final bool ascending;
+  final bool searchExpanded;
+  final TextEditingController searchController;
+  final VoidCallback onToggleSort;
+  final VoidCallback onToggleSearch;
+  final ValueChanged<String> onSearchChanged;
+  final int filteredCount;
+  final int totalCount;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+      decoration: const BoxDecoration(
+        color: AppColors.background,
+        border: Border(
+          bottom: BorderSide(color: AppColors.card, width: 0.6),
+        ),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            tooltip: searchExpanded ? 'Close search' : 'Search chapters',
+            icon: Icon(
+              searchExpanded ? Icons.close_rounded : Icons.search_rounded,
+              size: 20,
+              color: AppColors.textSecondary,
+            ),
+            onPressed: onToggleSearch,
+            visualDensity: VisualDensity.compact,
+          ),
+          if (searchExpanded)
+            Expanded(
+              child: TextField(
+                controller: searchController,
+                autofocus: true,
+                style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 14,
+                ),
+                decoration: const InputDecoration(
+                  hintText: 'Filter chapters…',
+                  hintStyle: TextStyle(
+                    color: AppColors.textTertiary,
+                    fontSize: 14,
+                  ),
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(vertical: 8),
+                ),
+                onChanged: onSearchChanged,
+              ),
+            )
+          else
+            Expanded(
+              child: Text(
+                searchExpanded || filteredCount == totalCount
+                    ? '$totalCount chapters'
+                    : '$filteredCount of $totalCount',
+                style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          Material(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(8),
+            child: InkWell(
+              onTap: onToggleSort,
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      ascending
+                          ? Icons.arrow_upward_rounded
+                          : Icons.arrow_downward_rounded,
+                      size: 14,
+                      color: AppColors.textPrimary,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      ascending ? 'Asc' : 'Desc',
+                      style: const TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+        ],
       ),
     );
   }

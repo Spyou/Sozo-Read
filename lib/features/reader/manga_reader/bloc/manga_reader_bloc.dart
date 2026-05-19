@@ -10,7 +10,6 @@ import '../../../../core/repository/library_repository.dart';
 import '../../../../core/repository/provider_repository.dart';
 import '../../../../core/repository/read_chapters_repository.dart';
 import '../../../../core/repository/tracker_repository.dart';
-import '../../../../core/state/auth_service.dart';
 import 'manga_reader_event.dart';
 import 'manga_reader_state.dart';
 
@@ -52,11 +51,13 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
     var entry = _library.get(event.book.sourceId, event.book.id);
 
     // Auto-save: if the book isn't in the library yet AND the user is
-    // signed in, create an entry with status=Reading on first chapter
-    // open. Mirrors Tachiyomi / Webnovel behaviour — opening a chapter
-    // is an implicit "I want to read this." Signed-out users still get
-    // gated at the explicit bookmark button on the detail screen.
-    if (entry == null && sl<AuthService>().isSignedIn) {
+    // create an entry with status=Reading on first chapter open. Mirrors
+    // Tachiyomi / Webnovel behaviour — opening a chapter is an implicit
+    // "I want to read this." Used to be gated on `isSignedIn` but that
+    // hid the Continue Reading row entirely for signed-out users; the
+    // library dirty-queue handles deferred sync just fine, so add for
+    // everyone and let sync catch up whenever the user signs in.
+    if (entry == null) {
       final item = BookItem(
         id: event.book.id,
         title: event.book.title,
@@ -68,24 +69,47 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
       entry = await _library.add(item);
     }
 
-    final resume = (entry != null &&
-            entry.lastChapterIndex == event.chapterIndex &&
+    // Auto-match + promote remote status to "reading" so the series shows
+    // up on the user's tracker reading list immediately, without waiting
+    // for them to finish a chapter. Fire-and-forget.
+    // ignore: discarded_futures
+    sl<TrackerRepository>().pushReadingStarted(
+      sourceId: event.book.sourceId,
+      bookId: event.book.id,
+      localTitle: event.book.title,
+    );
+
+    final resume = (entry.lastChapterIndex == event.chapterIndex &&
             (entry.lastChapterProgress ?? 0) > 0 &&
             (entry.lastChapterProgress ?? 0) < 1)
         ? entry.lastChapterProgress
         : null;
-    // Promote planning / on-hold -> reading so the book shows up in the
-    // Library "Reading" tab + Home Continue-Reading row. Completed books
-    // are left alone — re-reading a finished book shouldn't demote it.
-    if (entry != null &&
-        entry.status != LibraryStatus.reading &&
-        entry.status != LibraryStatus.completed) {
-      // ignore: discarded_futures
-      _library.setStatus(
+    // Promote to Reading whenever the user opens a chapter they haven't
+    // already finished. This covers two cases:
+    //   * planning / on-hold / dropped → reading (always)
+    //   * completed → reading IFF the chapter being opened is unread
+    //     (i.e. a new chapter has been released since they finished —
+    //     "re-reading" an already-finished chapter stays Completed).
+    if (entry.status != LibraryStatus.reading) {
+      final openingCh = event.book.chapters.isNotEmpty
+          ? event.book.chapters[event.chapterIndex]
+          : null;
+      final readIds = sl<ReadChaptersRepository>().getReadChapterIds(
         event.book.sourceId,
         event.book.id,
-        LibraryStatus.reading,
       );
+      final openingIsUnread =
+          openingCh != null && !readIds.contains(openingCh.id);
+      final shouldPromote = entry.status != LibraryStatus.completed ||
+          openingIsUnread;
+      if (shouldPromote) {
+        // ignore: discarded_futures
+        _library.setStatus(
+          event.book.sourceId,
+          event.book.id,
+          LibraryStatus.reading,
+        );
+      }
     }
     await _fetchPages(emit, pendingResume: resume);
     _prefetchNext();
@@ -147,6 +171,20 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
             bookId: book.id,
             chapterNumber: chapterNumber,
           );
+          // If this was the newest chapter (chapter list is newest-first,
+          // so index 0), auto-flip the local library to Completed so the
+          // book drops off Home > Continue Reading and lands in the
+          // Library > Completed tab. If the source later picks up a new
+          // chapter (ongoing series), [_onStarted] promotes back to
+          // Reading the moment the user opens that unread chapter.
+          if (state.chapterIndex == 0) {
+            // ignore: discarded_futures
+            _library.setStatus(
+              book.sourceId,
+              book.id,
+              LibraryStatus.completed,
+            );
+          }
         }
       }
     }

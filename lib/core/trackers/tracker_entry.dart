@@ -1,3 +1,17 @@
+/// Whether the series itself is still being released on the remote
+/// service. Distinct from [TrackerStatus] (which is the user's bucket).
+/// Used by the auto-complete logic — only `finished` and `cancelled`
+/// series have a "real" total chapter count we can compare progress
+/// against to decide if the user is done.
+enum SeriesReleaseStatus {
+  releasing,
+  finished,
+  notYetReleased,
+  cancelled,
+  hiatus,
+  unknown,
+}
+
 /// Where the user is on a remote tracker for a single series.
 ///
 /// Mirrors AniList/MAL's status taxonomy. We pick a small intersection so
@@ -46,6 +60,7 @@ class TrackerEntry {
     this.totalChapters = 0,
     this.score,
     this.updatedAt,
+    this.seriesStatus = SeriesReleaseStatus.unknown,
   });
 
   /// Short tracker identifier — e.g. `'anilist'`, `'mal'`.
@@ -75,6 +90,11 @@ class TrackerEntry {
 
   final DateTime? updatedAt;
 
+  /// Whether the remote service considers the series still releasing,
+  /// finished, cancelled, etc. Drives the auto-complete logic in
+  /// `TrackerRepository._maybeAutoComplete`.
+  final SeriesReleaseStatus seriesStatus;
+
   TrackerEntry copyWith({
     TrackerStatus? status,
     int? progress,
@@ -91,5 +111,6 @@ class TrackerEntry {
         totalChapters: totalChapters,
         score: score ?? this.score,
         updatedAt: updatedAt ?? this.updatedAt,
+        seriesStatus: seriesStatus,
       );
 }

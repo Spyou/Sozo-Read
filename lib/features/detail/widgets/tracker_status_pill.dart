@@ -48,6 +48,30 @@ class _TrackerStatusPillState extends State<TrackerStatusPill> {
   @override
   void initState() {
     super.initState();
+    // Listen on every tracker's auth changes so the pill appears the moment
+    // the user finishes the OAuth round-trip from the trackers settings
+    // screen — even if the detail screen was already mounted in the back
+    // stack at the time.
+    for (final tracker in _repo.trackers) {
+      tracker.authChanges.addListener(_onAuthChanged);
+    }
+    _kickOffMatch();
+  }
+
+  @override
+  void dispose() {
+    for (final tracker in _repo.trackers) {
+      tracker.authChanges.removeListener(_onAuthChanged);
+    }
+    super.dispose();
+  }
+
+  void _onAuthChanged() {
+    if (!mounted) return;
+    // A tracker just became authenticated — re-run the auto-match in case
+    // we previously bailed out due to no authed trackers. setState in the
+    // finally clause of _kickOffMatch will refresh us.
+    setState(() {});
     _kickOffMatch();
   }
 
@@ -105,36 +129,27 @@ class _TrackerStatusPillState extends State<TrackerStatusPill> {
 
     if (matches.isEmpty) {
       if (_matching) {
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: _LookingUpChip(),
-          ),
-        );
+        // Show a card-shaped skeleton so the slot is reserved and the
+        // transition into the real card doesn't shift the layout.
+        return const _TrackerCardSkeleton();
       }
       // Auto-match completed with no result — quiet failure.
       return const SizedBox.shrink();
     }
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          for (final match in matches)
-            _TrackerChip(
-              match: match,
-              tracker: _repo.trackerById(match.trackerId),
-              entry: _entryCache[match.key],
-              isLoadingEntry:
-                  !_entryCache.containsKey(match.key),
-              onMount: () => _loadEntry(match),
-              onTap: () => _openEditSheet(match),
-            ),
-        ],
-      ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final match in matches)
+          _TrackerCard(
+            match: match,
+            tracker: _repo.trackerById(match.trackerId),
+            entry: _entryCache[match.key],
+            isLoadingEntry: !_entryCache.containsKey(match.key),
+            onMount: () => _loadEntry(match),
+            onOpenMenu: () => _openEditSheet(match),
+          ),
+      ],
     );
   }
 
@@ -267,55 +282,57 @@ class _TrackerStatusPillState extends State<TrackerStatusPill> {
   }
 }
 
-/// Pill shown while the initial auto-match query is still in flight.
-class _LookingUpChip extends StatelessWidget {
+/// Compact skeleton shown while the initial auto-match is still in flight.
+/// Same height as the real chip so the slot doesn't shift when it lands.
+class _TrackerCardSkeleton extends StatelessWidget {
+  const _TrackerCardSkeleton();
+
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: AppColors.card,
-      borderRadius: BorderRadius.circular(20),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 12,
-              height: 12,
-              child: CircularProgressIndicator(
-                strokeWidth: 1.6,
-                valueColor: AlwaysStoppedAnimation<Color>(
-                  AppColors.primary.withValues(alpha: 0.9),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            const Text(
+    return _ChipShell(
+      child: Row(
+        children: [
+          const _TrackerLogo(trackerId: 'anilist'),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
               'Looking up on AniList…',
               style: TextStyle(
-                color: AppColors.textPrimary,
+                color: AppColors.textSecondary,
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
             ),
-          ],
-        ),
+          ),
+          SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(
+              strokeWidth: 1.6,
+              valueColor: AlwaysStoppedAnimation<Color>(
+                AppColors.primary.withValues(alpha: 0.9),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-/// Single tracker chip — `[icon] AniList: Reading · 12/1180 ▾`. Wraps a
-/// stateful loader so it can request its [TrackerEntry] exactly once when
-/// it first appears.
-class _TrackerChip extends StatefulWidget {
-  const _TrackerChip({
+/// Full-width tracker card. Replaces the small pill chip with a richer
+/// surface that surfaces status, score, and progress at a glance.
+///
+/// All three interactive areas (status chip, score chip, overflow `⋯`)
+/// call back into the parent which already owns the sheets/dialogs.
+class _TrackerCard extends StatefulWidget {
+  const _TrackerCard({
     required this.match,
     required this.tracker,
     required this.entry,
     required this.isLoadingEntry,
     required this.onMount,
-    required this.onTap,
+    required this.onOpenMenu,
   });
 
   final TrackerMatch match;
@@ -323,13 +340,17 @@ class _TrackerChip extends StatefulWidget {
   final TrackerEntry? entry;
   final bool isLoadingEntry;
   final VoidCallback onMount;
-  final VoidCallback onTap;
+
+  /// Tapping the chip surface or the trailing ⋯ both open the same edit
+  /// sheet — status, score, open-on-web, unlink all live there. Keeps
+  /// the inline visual minimal.
+  final VoidCallback onOpenMenu;
 
   @override
-  State<_TrackerChip> createState() => _TrackerChipState();
+  State<_TrackerCard> createState() => _TrackerCardState();
 }
 
-class _TrackerChipState extends State<_TrackerChip> {
+class _TrackerCardState extends State<_TrackerCard> {
   @override
   void initState() {
     super.initState();
@@ -339,77 +360,129 @@ class _TrackerChipState extends State<_TrackerChip> {
   }
 
   @override
-  void didUpdateWidget(covariant _TrackerChip oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // If the entry was invalidated (e.g. after setStatus) we need to refetch.
-    if (widget.isLoadingEntry && !oldWidget.isLoadingEntry) {
+  void didUpdateWidget(covariant _TrackerCard old) {
+    super.didUpdateWidget(old);
+    if (widget.isLoadingEntry && !old.isLoadingEntry) {
       WidgetsBinding.instance.addPostFrameCallback((_) => widget.onMount());
     }
   }
 
-  IconData get _iconFor {
-    switch (widget.match.trackerId) {
-      case 'anilist':
-        return Icons.bookmark_rounded;
-      case 'mal':
-        return Icons.menu_book_rounded;
-      default:
-        return Icons.link_rounded;
-    }
-  }
-
-  String get _trackerLabel =>
-      widget.tracker?.displayName ??
-      (widget.match.trackerId == 'anilist'
-          ? 'AniList'
-          : widget.match.trackerId == 'mal'
-              ? 'MAL'
-              : widget.match.trackerId);
-
-  String _buildLabel() {
-    final tName = _trackerLabel;
+  @override
+  Widget build(BuildContext context) {
     final entry = widget.entry;
-    if (entry == null) {
-      if (widget.isLoadingEntry) return '$tName: …';
-      return tName;
-    }
-    final total = entry.totalChapters > 0 ? '${entry.totalChapters}' : '?';
-    return '$tName: ${entry.status.label} · ${entry.progress}/$total';
+    final loading = widget.isLoadingEntry && entry == null;
+
+    // Build the compact body label, e.g. "Reading · 1105 / 1182" or
+    // "Reading · Ch 1105" when total chapters are unknown.
+    final status = entry?.status.label ?? (loading ? '…' : 'Reading');
+    final progressText = entry == null
+        ? ''
+        : entry.totalChapters > 0
+            ? ' · ${entry.progress} / ${entry.totalChapters}'
+            : entry.progress > 0
+                ? ' · Ch ${entry.progress}'
+                : '';
+    final scoreText = (entry?.score != null && entry!.score! > 0)
+        ? ' · ★${entry.score!.toStringAsFixed(1)}'
+        : '';
+
+    return _ChipShell(
+      onTap: widget.onOpenMenu,
+      child: Row(
+        children: [
+          _TrackerLogo(trackerId: widget.match.trackerId),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '$status$progressText$scoreText',
+              style: const TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 6),
+          const Icon(
+            Icons.more_horiz_rounded,
+            size: 18,
+            color: AppColors.textSecondary,
+          ),
+        ],
+      ),
+    );
   }
+}
+
+/// Compact single-row chip shared by the real tracker view and the
+/// skeleton — keeps padding/color/corner radius consistent so transitions
+/// between loading and loaded don't shift the layout.
+class _ChipShell extends StatelessWidget {
+  const _ChipShell({required this.child, this.onTap});
+  final Widget child;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final accent = AppColors.primary;
-    return Material(
-      color: accent.withValues(alpha: 0.15),
-      borderRadius: BorderRadius.circular(20),
-      child: InkWell(
-        onTap: widget.onTap,
-        borderRadius: BorderRadius.circular(20),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 6, 8, 6),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(_iconFor, size: 14, color: accent),
-              const SizedBox(width: 6),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 240),
-                child: Text(
-                  _buildLabel(),
-                  style: TextStyle(
-                    color: accent,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              const SizedBox(width: 2),
-              Icon(Icons.arrow_drop_down_rounded, size: 18, color: accent),
-            ],
-          ),
+    final shell = Container(
+      margin: const EdgeInsets.fromLTRB(16, 2, 16, 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: child,
+    );
+    if (onTap == null) return shell;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: shell,
+    );
+  }
+}
+
+/// Small colored badge identifying the remote service. Right now AniList
+/// only — uses AniList's brand blue with the "A" mark. Extensible to a
+/// MAL badge later by keying off [trackerId].
+class _TrackerLogo extends StatelessWidget {
+  const _TrackerLogo({required this.trackerId});
+  final String trackerId;
+
+  @override
+  Widget build(BuildContext context) {
+    Color bg;
+    String letter;
+    switch (trackerId) {
+      case 'anilist':
+        bg = const Color(0xFF02A9FF);
+        letter = 'A';
+        break;
+      case 'mal':
+        bg = const Color(0xFF2E51A2);
+        letter = 'M';
+        break;
+      default:
+        bg = AppColors.textTertiary;
+        letter = trackerId.isNotEmpty ? trackerId[0].toUpperCase() : '?';
+    }
+    return Container(
+      width: 18,
+      height: 18,
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(5),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        letter,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+          letterSpacing: -0.2,
         ),
       ),
     );

@@ -108,6 +108,17 @@ class _SozoReadAppState extends State<SozoReadApp> with WidgetsBindingObserver {
       debugPrint('[deeplink] no route for $uri');
       return;
     }
+    // If we're already on the target screen, skip navigation. This is the
+    // common case for OAuth callbacks — the user tapped "Connect" from
+    // /settings/trackers, the browser sent them back, and we're now
+    // already on that screen. Calling .go() would replace the navigation
+    // stack and the back button would disappear.
+    final current =
+        _router.routerDelegate.currentConfiguration.uri.path;
+    if (current == target) {
+      debugPrint('[deeplink] already on $target — skipping go()');
+      return;
+    }
     debugPrint('[deeplink] routing to $target');
     _router.go(target);
   }
@@ -147,7 +158,11 @@ class _SozoReadAppState extends State<SozoReadApp> with WidgetsBindingObserver {
       target = raw;
     }
     if (target != null) {
-      _router.go(target);
+      final current =
+          _router.routerDelegate.currentConfiguration.uri.path;
+      if (current != target) {
+        _router.go(target);
+      }
       return true;
     }
     return super.didPushRouteInformation(routeInformation);
