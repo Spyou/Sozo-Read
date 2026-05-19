@@ -6,6 +6,7 @@ import '../../../../core/repository/downloads_repository.dart';
 import '../../../../core/repository/library_repository.dart';
 import '../../../../core/repository/provider_repository.dart';
 import '../../../../core/repository/read_chapters_repository.dart';
+import '../../../../core/repository/tracker_repository.dart';
 import '../../../../core/state/auth_service.dart';
 import 'novel_reader_event.dart';
 import 'novel_reader_state.dart';
@@ -93,6 +94,16 @@ class NovelReaderBloc extends Bloc<NovelReaderEvent, NovelReaderState> {
         _lastMarkedChapterKey = prevKey;
         // ignore: discarded_futures
         sl<ReadChaptersRepository>().mark(book.sourceId, book.id, prev.id);
+        // Push to linked trackers. Novel chapters are stored oldest-first,
+        // so chapterIndex + 1 is the chapter number when Chapter.number is
+        // missing.
+        final prevNumber = prev.number?.round() ?? (state.chapterIndex + 1);
+        // ignore: discarded_futures
+        sl<TrackerRepository>().pushProgress(
+          sourceId: book.sourceId,
+          bookId: book.id,
+          chapterNumber: prevNumber,
+        );
       }
     }
 
@@ -131,6 +142,13 @@ class NovelReaderBloc extends Bloc<NovelReaderEvent, NovelReaderState> {
         _lastMarkedChapterKey = key;
         // ignore: discarded_futures
         sl<ReadChaptersRepository>().mark(book.sourceId, book.id, ch.id);
+        final chapterNumber = ch.number?.round() ?? (state.chapterIndex + 1);
+        // ignore: discarded_futures
+        sl<TrackerRepository>().pushProgress(
+          sourceId: book.sourceId,
+          bookId: book.id,
+          chapterNumber: chapterNumber,
+        );
       }
     }
   }

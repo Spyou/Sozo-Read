@@ -75,6 +75,11 @@ dependencies:
   # Save individual manga panels to the device gallery via long-press.
   saver_gallery: ^4.0.1
 
+  # AniList / MAL OAuth tokens — encrypted at rest via Android Keystore /
+  # iOS Keychain rather than the plaintext Hive box used for prefs.
+  # (url_launcher above is reused to open the OAuth login URL.)
+  flutter_secure_storage: ^9.2.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

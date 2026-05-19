@@ -9,6 +9,7 @@ import '../../../../core/repository/downloads_repository.dart';
 import '../../../../core/repository/library_repository.dart';
 import '../../../../core/repository/provider_repository.dart';
 import '../../../../core/repository/read_chapters_repository.dart';
+import '../../../../core/repository/tracker_repository.dart';
 import '../../../../core/state/auth_service.dart';
 import 'manga_reader_event.dart';
 import 'manga_reader_state.dart';
@@ -134,6 +135,18 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
           // ignore: discarded_futures
           sl<ReadChaptersRepository>()
               .mark(book.sourceId, book.id, ch.id);
+          // Push to any linked trackers (AniList today, MAL later). The
+          // chapter list is newest-first, so chapterNumber comes from
+          // Chapter.number when known; fall back to counting up from the
+          // bottom of the list. Fire-and-forget — never blocks the reader.
+          final chapterNumber = ch.number?.round() ??
+              (book.chapters.length - state.chapterIndex);
+          // ignore: discarded_futures
+          sl<TrackerRepository>().pushProgress(
+            sourceId: book.sourceId,
+            bookId: book.id,
+            chapterNumber: chapterNumber,
+          );
         }
       }
     }

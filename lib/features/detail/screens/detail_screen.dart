@@ -20,6 +20,7 @@ import '../../../core/state/auth_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/book_card.dart';
 import '../../../core/widgets/state_views.dart';
+import '../widgets/tracker_status_pill.dart';
 import '../bloc/detail_bloc.dart';
 import '../bloc/detail_event.dart';
 import '../bloc/detail_state.dart';
@@ -354,6 +355,21 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
                         : () => onOpenChapter(
                               lastChapterIndex.clamp(0, book.chapters.length - 1),
                             ),
+                  ),
+                ),
+                // Tracker status (AniList). Hidden when no tracker is
+                // connected, when no match has been found yet, or while the
+                // initial auto-match search is in flight. See the pill's
+                // own state machine for the full set of cases.
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: TrackerStatusPill(
+                      sourceId: book.sourceId,
+                      bookId: book.id,
+                      localTitle: book.title,
+                    ),
                   ),
                 ),
               ],

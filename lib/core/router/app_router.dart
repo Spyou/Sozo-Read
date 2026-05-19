@@ -22,6 +22,9 @@ import '../../features/settings/screens/developers_settings_screen.dart';
 import '../../features/settings/screens/reading_settings_screen.dart';
 import '../../features/settings/screens/settings_screen.dart';
 import '../../features/settings/screens/storage_settings_screen.dart';
+import '../../features/settings/screens/trackers_settings_screen.dart';
+import '../di/injection.dart';
+import '../trackers/anilist/anilist_tracker.dart';
 import '../../features/sources/screens/sources_screen.dart';
 import '../../features/splash/screens/splash_screen.dart';
 import '../models/book_detail.dart';
@@ -57,6 +60,18 @@ String? parseSozoReadDeepLink(Uri uri) {
       path: '/login-callback',
       queryParameters: {'link': uri.toString()},
     ).toString();
+  }
+  // OAuth callback for the trackers (AniList implicit grant — token is in
+  // the URL fragment, `sozoread://oauth/anilist#access_token=...`). We
+  // hand the raw URI to the matching tracker as a side-effect, then send
+  // the user back to the trackers settings screen so the UI refreshes.
+  if (kind == 'oauth' && segments.length >= 2) {
+    final service = segments[1];
+    if (service == 'anilist') {
+      // ignore: discarded_futures
+      sl<AniListTracker>().completeLoginFromCallback(uri);
+      return '/settings/trackers';
+    }
   }
   if (kind == 'manga' && segments.length >= 3) {
     final sourceId = Uri.encodeComponent(segments[1]);
@@ -193,6 +208,11 @@ GoRouter buildRouter() {
         path: '/settings/about',
         name: 'settings-about',
         builder: (_, _) => const AboutSettingsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/trackers',
+        name: 'settings-trackers',
+        builder: (_, _) => const TrackersSettingsScreen(),
       ),
       GoRoute(
         path: '/detail/:sourceId/:bookId',

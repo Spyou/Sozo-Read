@@ -9,7 +9,12 @@ import '../repository/downloads_repository.dart';
 import '../repository/library_repository.dart';
 import '../repository/provider_repository.dart';
 import '../repository/read_chapters_repository.dart';
+import '../repository/tracker_repository.dart';
 import '../services/chapter_check_service.dart';
+import '../trackers/anilist/anilist_api.dart';
+import '../trackers/anilist/anilist_auth.dart';
+import '../trackers/anilist/anilist_tracker.dart';
+import '../trackers/tracker.dart';
 import '../services/cloudinary_service.dart';
 import '../services/notification_service.dart';
 import '../state/active_source_cubit.dart';
@@ -84,5 +89,17 @@ Future<void> configureDependencies() async {
   // already loaded (no second spinner).
   sl.registerLazySingleton<HomeBloc>(
     () => HomeBloc(repository: sl(), libraryRepository: sl()),
+  );
+
+  // ---- Trackers (AniList; MAL slot reserved for v1.3). ----
+  sl.registerLazySingleton<AniListAuth>(() => AniListAuth());
+  sl.registerLazySingleton<AniListApi>(
+    () => AniListApi(dio: sl(), auth: sl()),
+  );
+  sl.registerLazySingleton<AniListTracker>(
+    () => AniListTracker(api: sl(), auth: sl()),
+  );
+  sl.registerLazySingleton<TrackerRepository>(
+    () => TrackerRepository(trackers: <Tracker>[sl<AniListTracker>()]),
   );
 }

@@ -13,7 +13,9 @@ import 'repository/downloads_repository.dart';
 import 'repository/library_repository.dart';
 import 'repository/provider_repository.dart';
 import 'repository/read_chapters_repository.dart';
+import 'repository/tracker_repository.dart';
 import 'services/notification_service.dart';
+import 'trackers/anilist/anilist_tracker.dart';
 import 'state/active_source_cubit.dart';
 import 'state/manga_prefs_cubit.dart';
 import 'state/novel_prefs_cubit.dart';
@@ -46,8 +48,15 @@ class AppBootstrap {
     await LibraryRepository.init();
     await ReadChaptersRepository.init();
     await DownloadsRepository.init();
+    await TrackerRepository.init();
     await ActiveSourceCubit.init();
     await configureDependencies();
+    // Eager-init the AniList tracker so its auth state is resolved (token
+    // read from secure storage, viewer fetched) before any UI reads
+    // `isAuthenticated`. Fire-and-forget — failure to reach AniList at boot
+    // shouldn't block the app starting.
+    // ignore: discarded_futures
+    sl<AniListTracker>().init();
     // Force-eager init of theme + novel-prefs cubits so they read Hive
     // synchronously (they require the `settings` box to be open, which it
     // is by this point thanks to ActiveSourceCubit.init).

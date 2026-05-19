@@ -88,6 +88,12 @@ class _SettingsView extends StatelessWidget {
                 title: 'Storage',
                 onTap: () => context.push('/settings/storage'),
               ),
+              SettingsTile(
+                icon: Icons.sync_alt_rounded,
+                title: 'Trackers',
+                subtitle: 'AniList sync',
+                onTap: () => context.push('/settings/trackers'),
+              ),
             ],
           ),
 
