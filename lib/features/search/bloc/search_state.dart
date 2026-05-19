@@ -22,6 +22,19 @@ class SearchState extends Equatable {
   final List<BookItem> results; // original order, as fetched
   final String? error;
 
+  /// Total number of providers being queried for the current search run.
+  /// Zero when not searching. Used by the UI to show progress.
+  final int totalSources;
+
+  /// Source IDs that have returned (either with results or with an error /
+  /// timeout). Once `completedSources.length == totalSources`, the search
+  /// run is fully done.
+  final Set<String> completedSources;
+
+  /// Source IDs that errored or timed out. Subset of [completedSources].
+  /// Surfaced to the user as a small "couldn't reach: X" footer.
+  final Set<String> failedSources;
+
   const SearchState({
     this.query = '',
     this.sourceId,
@@ -30,7 +43,19 @@ class SearchState extends Equatable {
     this.status = SearchStatus.idle,
     this.results = const [],
     this.error,
+    this.totalSources = 0,
+    this.completedSources = const {},
+    this.failedSources = const {},
   });
+
+  /// True while the search run is still pending replies from one or more
+  /// sources. The UI uses this to keep a "still searching" indicator visible
+  /// underneath any partial results already shown.
+  bool get isStillSearching =>
+      status == SearchStatus.loading ||
+      (status == SearchStatus.success &&
+          totalSources > 0 &&
+          completedSources.length < totalSources);
 
   /// Results with the current sort applied (client-side).
   List<BookItem> get sortedResults {
@@ -59,6 +84,9 @@ class SearchState extends Equatable {
     List<BookItem>? results,
     String? error,
     bool clearError = false,
+    int? totalSources,
+    Set<String>? completedSources,
+    Set<String>? failedSources,
   }) =>
       SearchState(
         query: query ?? this.query,
@@ -68,8 +96,22 @@ class SearchState extends Equatable {
         status: status ?? this.status,
         results: results ?? this.results,
         error: clearError ? null : (error ?? this.error),
+        totalSources: totalSources ?? this.totalSources,
+        completedSources: completedSources ?? this.completedSources,
+        failedSources: failedSources ?? this.failedSources,
       );
 
   @override
-  List<Object?> get props => [query, sourceId, genre, sort, status, results, error];
+  List<Object?> get props => [
+        query,
+        sourceId,
+        genre,
+        sort,
+        status,
+        results,
+        error,
+        totalSources,
+        completedSources,
+        failedSources,
+      ];
 }

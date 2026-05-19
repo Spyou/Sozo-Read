@@ -1,11 +1,18 @@
 import 'dart:async';
 
+import 'package:dartz/dartz.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../../core/error/failures.dart';
 import '../../../core/models/book_item.dart';
 import '../../../core/repository/provider_repository.dart';
 import 'search_event.dart';
 import 'search_state.dart';
+
+/// Per-source ceiling. After this, a provider's result is treated as failed
+/// and the rest keep going. Tuned for cellular networks — dead hosts would
+/// otherwise sit in a 60–120s TCP timeout and block the whole UI.
+const _kPerSourceTimeout = Duration(seconds: 10);
 
 class SearchBloc extends Bloc<SearchEvent, SearchState> {
   SearchBloc({required ProviderRepository repository})
@@ -31,6 +38,9 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
         results: const [],
         status: SearchStatus.idle,
         clearError: true,
+        totalSources: 0,
+        completedSources: const {},
+        failedSources: const {},
       ));
       return;
     }
@@ -57,60 +67,116 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
     emit(state.copyWith(sort: event.sort));
   }
 
+  /// Streams results per-source instead of waiting for everyone. As each
+  /// provider returns (or times out), the state is emitted again with the
+  /// growing list of results so the UI shows hits the moment any source
+  /// replies, instead of staring at a spinner until the slowest one resolves.
   Future<void> _onSubmitted(SearchSubmitted event, Emitter<SearchState> emit) async {
     final q = state.query.trim();
     if (q.isEmpty) return;
     final runId = ++_runId;
-    emit(state.copyWith(status: SearchStatus.loading, clearError: true));
 
-    final source = state.sourceId;
+    final sourceIds = state.sourceId != null
+        ? <String>[state.sourceId!]
+        : _repo.providers.map((p) => p.sourceId).toList();
+    if (sourceIds.isEmpty) {
+      emit(state.copyWith(
+        status: SearchStatus.error,
+        error: 'No sources installed.',
+      ));
+      return;
+    }
     final category = state.genre ?? '';
-    if (source != null) {
-      final result = await _repo.search(source, q, category: category);
-      if (runId != _runId) return;
-      result.fold(
-        (f) => emit(state.copyWith(status: SearchStatus.error, error: f.message)),
-        (books) => emit(state.copyWith(status: SearchStatus.success, results: books)),
-      );
-      return;
-    }
 
-    // No "All sources" overload accepts category, so reuse provider-level
-    // search when a genre is active; otherwise use the aggregate helper.
-    if (state.genre != null && state.genre!.isNotEmpty) {
-      final merged = <BookItem>[];
-      String? firstError;
-      await Future.wait(_repo.providers.map((p) async {
-        final r = await _repo.search(p.sourceId, q, category: category);
-        r.fold(
-          (f) => firstError ??= f.message,
-          (books) => merged.addAll(books),
-        );
-      }));
-      if (runId != _runId) return;
-      if (merged.isEmpty && firstError != null) {
-        emit(state.copyWith(status: SearchStatus.error, error: firstError));
-      } else {
-        emit(state.copyWith(status: SearchStatus.success, results: merged));
-      }
-      return;
-    }
+    emit(state.copyWith(
+      status: SearchStatus.loading,
+      results: const [],
+      clearError: true,
+      totalSources: sourceIds.length,
+      completedSources: const {},
+      failedSources: const {},
+    ));
 
-    final all = await _repo.searchAll(q);
-    if (runId != _runId) return;
     final merged = <BookItem>[];
-    String? firstError;
-    for (final entry in all.entries) {
-      entry.value.fold(
-        (f) => firstError ??= f.message,
-        (books) => merged.addAll(books),
-      );
+    final completed = <String>{};
+    final failed = <String>{};
+    final stream = _streamSearches(sourceIds, q, category);
+
+    await emit.onEach<_TaggedResult>(
+      stream,
+      onData: (tag) {
+        if (runId != _runId) return;
+        completed.add(tag.sourceId);
+        if (tag.result == null) {
+          failed.add(tag.sourceId);
+        } else {
+          tag.result!.fold(
+            (_) => failed.add(tag.sourceId),
+            (books) => merged.addAll(books),
+          );
+        }
+        // Promote loading → success once we have anything to show OR every
+        // source has reported in. While still loading-with-no-results, only
+        // bump the progress counters so the shimmer keeps showing.
+        final allDone = completed.length == sourceIds.length;
+        if (merged.isNotEmpty || allDone) {
+          emit(state.copyWith(
+            status: SearchStatus.success,
+            results: List.of(merged),
+            completedSources: Set.of(completed),
+            failedSources: Set.of(failed),
+          ));
+        } else {
+          emit(state.copyWith(
+            completedSources: Set.of(completed),
+            failedSources: Set.of(failed),
+          ));
+        }
+      },
+    );
+
+    if (runId != _runId) return;
+    // Every source failed and we have nothing to show — surface the error
+    // view. If we have any results at all, leave the partial-success state
+    // alone (the UI shows a small "couldn't reach: X" footer instead).
+    if (merged.isEmpty && failed.length == sourceIds.length) {
+      emit(state.copyWith(
+        status: SearchStatus.error,
+        error: failed.length == 1
+            ? 'Could not reach ${failed.first}. Check your connection and try again.'
+            : 'No sources could be reached. Check your connection and try again.',
+      ));
     }
-    if (merged.isEmpty && firstError != null) {
-      emit(state.copyWith(status: SearchStatus.error, error: firstError));
-    } else {
-      emit(state.copyWith(status: SearchStatus.success, results: merged));
+  }
+
+  /// Fans out one search per source, applies a per-source timeout, and
+  /// yields tagged results in completion order via a [StreamController].
+  Stream<_TaggedResult> _streamSearches(
+    List<String> sourceIds,
+    String query,
+    String category,
+  ) {
+    final ctrl = StreamController<_TaggedResult>();
+    int remaining = sourceIds.length;
+    for (final id in sourceIds) {
+      // Don't await — let them race.
+      // ignore: discarded_futures
+      () async {
+        Either<Failure, List<BookItem>>? result;
+        try {
+          result = await _repo
+              .search(id, query, category: category)
+              .timeout(_kPerSourceTimeout);
+        } catch (_) {
+          // TimeoutException + anything else _guard might let escape →
+          // signal a null result so the bloc marks this source as failed.
+        }
+        if (!ctrl.isClosed) ctrl.add(_TaggedResult(id, result));
+        remaining--;
+        if (remaining == 0 && !ctrl.isClosed) ctrl.close();
+      }();
     }
+    return ctrl.stream;
   }
 
   @override
@@ -118,4 +184,10 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
     _debounce?.cancel();
     return super.close();
   }
+}
+
+class _TaggedResult {
+  const _TaggedResult(this.sourceId, this.result);
+  final String sourceId;
+  final Either<Failure, List<BookItem>>? result;
 }

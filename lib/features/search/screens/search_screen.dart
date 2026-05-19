@@ -7,7 +7,7 @@ import '../../../core/models/book_item.dart';
 import '../../../core/repository/provider_repository.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/book_card.dart';
-import '../../../core/widgets/state_views.dart';
+import '../../../core/widgets/state_views.dart' show EmptyView, ErrorView;
 import '../bloc/search_bloc.dart';
 import '../bloc/search_event.dart';
 import '../bloc/search_state.dart';
@@ -177,30 +177,29 @@ class _SearchViewState extends State<_SearchView> {
                 if (state.status == SearchStatus.idle) {
                   return const EmptyView(message: 'Type to search', icon: Icons.search);
                 }
-                if (state.status == SearchStatus.loading) return const LoadingView();
                 if (state.status == SearchStatus.error) {
                   return ErrorView(
                     message: state.error ?? 'Search failed',
-                    onRetry: () => context.read<SearchBloc>().add(const SearchSubmitted()),
+                    onRetry: () =>
+                        context.read<SearchBloc>().add(const SearchSubmitted()),
                   );
                 }
-                final results = state.sortedResults;
-                if (results.isEmpty) {
-                  return const EmptyView(message: 'No results.');
+                // Loading with no results yet — full shimmer grid.
+                if (state.status == SearchStatus.loading) {
+                  return const _SearchShimmerGrid();
                 }
-                return GridView.builder(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    childAspectRatio: 0.52,
-                    crossAxisSpacing: 10,
-                    mainAxisSpacing: 14,
-                  ),
-                  itemCount: results.length,
-                  itemBuilder: (_, i) => BookCard(
-                    book: results[i],
-                    onTap: () => _openDetail(results[i]),
-                  ),
+                final results = state.sortedResults;
+                final stillSearching = state.isStillSearching;
+                if (results.isEmpty && !stillSearching) {
+                  // All sources reported in and nothing matched.
+                  return _EmptyResultsView(
+                    failedSources: state.failedSources,
+                  );
+                }
+                return _SearchResultsGrid(
+                  results: results,
+                  state: state,
+                  onTap: _openDetail,
                 );
               },
             ),
@@ -208,6 +207,214 @@ class _SearchViewState extends State<_SearchView> {
         ],
       ),
     );
+  }
+}
+
+/// Shimmer placeholder grid shown while no source has returned results yet.
+/// Matches the result grid's geometry so the transition is seamless.
+class _SearchShimmerGrid extends StatelessWidget {
+  const _SearchShimmerGrid();
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        childAspectRatio: 0.52,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 14,
+      ),
+      itemCount: 12,
+      itemBuilder: (_, _) => const BookCardShimmer(width: double.infinity),
+    );
+  }
+}
+
+/// Grid with progressive results. While more sources are still pending,
+/// a small progress footer + a row of shimmer cards is appended so the user
+/// can see that more hits may still arrive.
+class _SearchResultsGrid extends StatelessWidget {
+  const _SearchResultsGrid({
+    required this.results,
+    required this.state,
+    required this.onTap,
+  });
+  final List<BookItem> results;
+  final SearchState state;
+  final ValueChanged<BookItem> onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final stillSearching = state.isStillSearching;
+    final hasFailures = state.failedSources.isNotEmpty &&
+        !stillSearching; // Surface failures only once we're done.
+
+    // Use CustomScrollView so we can stack: optional warning banner ->
+    // results grid -> optional "still searching" footer.
+    return CustomScrollView(
+      slivers: [
+        if (hasFailures)
+          SliverToBoxAdapter(
+            child: _PartialFailureBanner(
+              failedSources: state.failedSources,
+            ),
+          ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+          sliver: SliverGrid.builder(
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              childAspectRatio: 0.52,
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 14,
+            ),
+            itemCount: results.length,
+            itemBuilder: (_, i) => BookCard(
+              book: results[i],
+              onTap: () => onTap(results[i]),
+            ),
+          ),
+        ),
+        if (stillSearching) ...[
+          SliverToBoxAdapter(
+            child: _SearchingFooter(
+              completed: state.completedSources.length,
+              total: state.totalSources,
+            ),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+            sliver: SliverGrid.builder(
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                childAspectRatio: 0.52,
+                crossAxisSpacing: 10,
+                mainAxisSpacing: 14,
+              ),
+              itemCount: 3,
+              itemBuilder: (_, _) =>
+                  const BookCardShimmer(width: double.infinity),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Small inline progress chip shown beneath partial results while the
+/// remaining sources are still fetching.
+class _SearchingFooter extends StatelessWidget {
+  const _SearchingFooter({required this.completed, required this.total});
+  final int completed;
+  final int total;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: AppColors.primary,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            'Searching… ($completed of $total sources)',
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Soft warning banner shown above the result grid when one or more
+/// sources failed but at least one returned hits. Click to dismiss.
+class _PartialFailureBanner extends StatefulWidget {
+  const _PartialFailureBanner({required this.failedSources});
+  final Set<String> failedSources;
+
+  @override
+  State<_PartialFailureBanner> createState() => _PartialFailureBannerState();
+}
+
+class _PartialFailureBannerState extends State<_PartialFailureBanner> {
+  bool _dismissed = false;
+  @override
+  Widget build(BuildContext context) {
+    if (_dismissed || widget.failedSources.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final names = widget.failedSources.toList()..sort();
+    final label = names.length == 1
+        ? "Couldn't reach ${names.first}"
+        : "Couldn't reach ${names.join(', ')}";
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: Material(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+          child: Row(
+            children: [
+              const Icon(Icons.cloud_off_outlined,
+                  size: 16, color: AppColors.textSecondary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Dismiss',
+                icon: const Icon(Icons.close_rounded,
+                    size: 16, color: AppColors.textTertiary),
+                onPressed: () => setState(() => _dismissed = true),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// "No results" state. If some sources failed, mention them so the user
+/// knows the empty result wasn't necessarily authoritative.
+class _EmptyResultsView extends StatelessWidget {
+  const _EmptyResultsView({required this.failedSources});
+  final Set<String> failedSources;
+
+  @override
+  Widget build(BuildContext context) {
+    if (failedSources.isEmpty) {
+      return const EmptyView(message: 'No results.');
+    }
+    final names = failedSources.toList()..sort();
+    final hint = names.length == 1
+        ? 'Also couldn\'t reach ${names.first}.'
+        : 'Also couldn\'t reach: ${names.join(', ')}.';
+    return EmptyView(message: 'No results.\n$hint');
   }
 }
 
