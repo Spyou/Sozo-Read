@@ -40,6 +40,11 @@ class _TrackerStatusPillState extends State<TrackerStatusPill> {
   /// mount — used to differentiate "looking up" from "no matches".
   bool _matching = false;
 
+  /// Guards the "no match found" snackbar so it fires at most once per
+  /// widget lifetime — without this, every rebuild after the match call
+  /// would re-trigger the toast.
+  bool _noMatchToastShown = false;
+
   /// Cached remote entries per match key. Populated lazily when each chip
   /// is built and refreshed after every setStatus / setScore.
   final Map<String, TrackerEntry?> _entryCache = {};
@@ -92,7 +97,33 @@ class _TrackerStatusPillState extends State<TrackerStatusPill> {
       // Quiet failure — chip just won't render.
     } finally {
       if (mounted) setState(() => _matching = false);
+      _maybeFireNoMatchToast();
     }
+  }
+
+  /// If auto-match ran across every authed tracker and none produced a
+  /// link, surface a one-shot snackbar so the user knows the chip isn't
+  /// going to appear and why. Without this the silent-empty state would
+  /// look like the tracker is just broken.
+  void _maybeFireNoMatchToast() {
+    if (!mounted) return;
+    if (_noMatchToastShown) return;
+    final matches = _repo.matchesFor(widget.sourceId, widget.bookId);
+    if (matches.isNotEmpty) return;
+    final names = _repo.authenticatedTrackers
+        .map((t) => t.displayName)
+        .toList();
+    if (names.isEmpty) return;
+    _noMatchToastShown = true;
+    final on = names.length == 1
+        ? names.first
+        : '${names.take(names.length - 1).join(', ')} or ${names.last}';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text("Couldn't find this manga on $on"),
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   Future<void> _loadEntry(TrackerMatch match) async {

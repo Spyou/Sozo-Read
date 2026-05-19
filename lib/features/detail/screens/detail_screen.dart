@@ -12,6 +12,7 @@ import '../../../core/models/book_detail.dart';
 import '../../../core/models/book_item.dart';
 import '../../../core/models/chapter.dart';
 import '../../../core/models/provider_info.dart';
+import '../../../core/repository/book_detail_cache.dart';
 import '../../../core/repository/downloads_repository.dart';
 import '../../../core/repository/library_repository.dart';
 import '../../../core/repository/provider_repository.dart';
@@ -40,7 +41,14 @@ class DetailScreen extends StatelessWidget {
         providerRepo: sl<ProviderRepository>(),
         libraryRepo: sl<LibraryRepository>(),
         readChaptersRepo: sl<ReadChaptersRepository>(),
-      )..add(DetailLoaded(sourceId: sourceId, url: url)),
+        cache: sl<BookDetailCache>(),
+      )..add(DetailLoaded(
+          sourceId: sourceId,
+          url: url,
+          // Threaded through so the bloc can do a cache lookup without
+          // waiting for the network — see DetailBloc._fetch.
+          bookId: placeholder?.id,
+        )),
       child: _DetailView(placeholder: placeholder),
     );
   }

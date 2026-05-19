@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:hive/hive.dart';
 
 import '../../../core/models/book_item.dart';
+import '../../../core/repository/book_detail_cache.dart';
 import '../../../core/repository/library_repository.dart';
 import '../../../core/repository/provider_repository.dart';
 import '../../../core/repository/read_chapters_repository.dart';
@@ -15,9 +16,11 @@ class DetailBloc extends Bloc<DetailEvent, DetailState> {
     required ProviderRepository providerRepo,
     required LibraryRepository libraryRepo,
     required ReadChaptersRepository readChaptersRepo,
+    required BookDetailCache cache,
   })  : _provider = providerRepo,
         _library = libraryRepo,
         _readChapters = readChaptersRepo,
+        _cache = cache,
         super(const DetailState()) {
     on<DetailLoaded>(_onLoaded);
     on<DetailReloaded>(_onReloaded);
@@ -35,10 +38,12 @@ class DetailBloc extends Bloc<DetailEvent, DetailState> {
   final ProviderRepository _provider;
   final LibraryRepository _library;
   final ReadChaptersRepository _readChapters;
+  final BookDetailCache _cache;
   StreamSubscription<BoxEvent>? _readChaptersSub;
 
   String? _sourceId;
   String? _url;
+  String? _bookId;
 
   @override
   Future<void> close() async {
@@ -49,18 +54,75 @@ class DetailBloc extends Bloc<DetailEvent, DetailState> {
   Future<void> _onLoaded(DetailLoaded event, Emitter<DetailState> emit) async {
     _sourceId = event.sourceId;
     _url = event.url;
+    _bookId = event.bookId;
     await _fetch(emit);
   }
 
-  Future<void> _onReloaded(DetailReloaded event, Emitter<DetailState> emit) => _fetch(emit);
+  Future<void> _onReloaded(DetailReloaded event, Emitter<DetailState> emit) =>
+      _fetch(emit, force: true);
 
-  Future<void> _fetch(Emitter<DetailState> emit) async {
+  /// Stale-while-revalidate load:
+  ///   1. Emit cached [BookDetail] immediately (if any) → screen renders.
+  ///   2. Fire the network refresh in the same flow → emit again on success.
+  /// Cache hits skip the JS-engine round trip on the first paint, which is
+  /// the bulk of the detail-load latency for most sources.
+  Future<void> _fetch(Emitter<DetailState> emit, {bool force = false}) async {
     if (_sourceId == null || _url == null) return;
-    emit(state.copyWith(status: DetailStatus.loading, clearError: true));
+
+    // Cache lookup. Requires bookId — the caller passes it from the
+    // placeholder when navigating from a card; deep-link / search paths
+    // skip this and just go straight to the network.
+    final bookId = _bookId;
+    final cached = bookId == null
+        ? null
+        : _cache.get(_sourceId!, bookId);
+
+    if (cached != null) {
+      // Render the cached entry NOW so the user sees content instantly.
+      final entry = _library.get(cached.sourceId, cached.id);
+      final reads = _readChapters.getReadChapterIds(cached.sourceId, cached.id);
+      emit(state.copyWith(
+        status: DetailStatus.success,
+        book: cached,
+        library: entry,
+        clearLibrary: entry == null,
+        readChapterIds: reads,
+      ));
+      // If the entry is fresh enough we still do a quiet background
+      // refresh BELOW unless the caller forced it (pull-to-refresh).
+      // For most sessions the fresh-cache path means the user never
+      // sees a spinner on a re-open.
+    } else {
+      emit(state.copyWith(status: DetailStatus.loading, clearError: true));
+    }
+
+    // Skip the network when we already have a fresh cached entry and
+    // this isn't a forced refresh. The user gets instant data and no
+    // background work; pull-to-refresh on the detail screen forces a
+    // refetch when they want fresh chapters.
+    if (cached != null && !force && bookId != null) {
+      if (_cache.isFresh(_sourceId!, bookId)) {
+        // Still trigger similar-books since that wasn't cached above.
+        if (cached.genres.isNotEmpty) {
+          add(const DetailSimilarRequested());
+        }
+        return;
+      }
+    }
+
     final result = await _provider.detail(_sourceId!, _url!);
     result.fold(
-      (f) => emit(state.copyWith(status: DetailStatus.error, error: f.message)),
+      (f) {
+        // If we already showed the cached entry, don't clobber it with
+        // an error screen — keep the success state and let the user
+        // pull-to-refresh manually. Only show error when nothing else
+        // is on screen.
+        if (cached != null) return;
+        emit(state.copyWith(status: DetailStatus.error, error: f.message));
+      },
       (book) {
+        // ignore: discarded_futures
+        _cache.put(book);
         final entry = _library.get(book.sourceId, book.id);
         final reads =
             _readChapters.getReadChapterIds(book.sourceId, book.id);

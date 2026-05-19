@@ -1,17 +1,28 @@
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// AniList OAuth 2.0 Implicit Grant client.
 ///
-/// The user must register an OAuth client at
-/// https://anilist.co/settings/developer with callback URL
-/// `sozoread://oauth/anilist` and paste the assigned numeric client ID into
-/// [anilistClientId] below. The implicit-grant flow puts the access token in
-/// the URL **fragment** (after `#`) of the redirect, not the query string —
-/// see [AniListAuth.handleCallback].
-const String anilistClientId = '41817';
+/// Register an OAuth client at https://anilist.co/settings/developer with
+/// callback URL `sozoread://oauth/anilist`, then set `ANILIST_CLIENT_ID`
+/// in `.env`. The implicit-grant flow puts the access token in the URL
+/// **fragment** (after `#`) of the redirect, not the query string — see
+/// [AniListAuth.handleCallback].
+String? get anilistClientId => dotenv.maybeGet('ANILIST_CLIENT_ID')?.trim();
 
 /// Custom-scheme redirect URI registered with the OS for AniList callbacks.
 const String anilistRedirectUri = 'sozoread://oauth/anilist';
+
+/// Thrown by [AniListAuth.buildAuthorizeUrl] when the developer hasn't
+/// configured `ANILIST_CLIENT_ID` in `.env`. Surfaced to the user as a
+/// snackbar instead of opening a broken authorize URL.
+class AniListClientIdMissing implements Exception {
+  const AniListClientIdMissing();
+  @override
+  String toString() =>
+      'AniListClientIdMissing: register a client at '
+      'https://anilist.co/settings/developer and set ANILIST_CLIENT_ID in .env';
+}
 
 /// Secure-storage key under which the AniList access token is cached.
 const String _tokenKey = 'anilist_access_token';
@@ -39,9 +50,16 @@ class AniListAuth {
   /// caller is expected to open this URL in the system browser; AniList
   /// will then redirect to [anilistRedirectUri] with the token in the URL
   /// fragment.
+  ///
+  /// Throws [AniListClientIdMissing] when `ANILIST_CLIENT_ID` is unset in
+  /// `.env` — calling code surfaces that as a user-friendly snackbar.
   Future<String> buildAuthorizeUrl() async {
+    final id = anilistClientId;
+    if (id == null || id.isEmpty) {
+      throw const AniListClientIdMissing();
+    }
     return 'https://anilist.co/api/v2/oauth/authorize'
-        '?client_id=$anilistClientId'
+        '?client_id=$id'
         '&response_type=token';
   }
 

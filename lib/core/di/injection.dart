@@ -5,6 +5,7 @@ import '../../features/home/bloc/home_bloc.dart';
 import '../provider/provider_downloader.dart';
 import '../provider/provider_manager.dart';
 import '../provider/provider_registry.dart';
+import '../repository/book_detail_cache.dart';
 import '../repository/downloads_repository.dart';
 import '../repository/library_repository.dart';
 import '../repository/provider_repository.dart';
@@ -14,6 +15,9 @@ import '../services/chapter_check_service.dart';
 import '../trackers/anilist/anilist_api.dart';
 import '../trackers/anilist/anilist_auth.dart';
 import '../trackers/anilist/anilist_tracker.dart';
+import '../trackers/mal/mal_api.dart';
+import '../trackers/mal/mal_auth.dart';
+import '../trackers/mal/mal_tracker.dart';
 import '../trackers/tracker.dart';
 import '../services/cloudinary_service.dart';
 import '../services/notification_service.dart';
@@ -57,6 +61,7 @@ Future<void> configureDependencies() async {
     () => ReadChaptersRepository(),
   );
   sl.registerLazySingleton<DownloadsRepository>(() => DownloadsRepository());
+  sl.registerLazySingleton<BookDetailCache>(() => BookDetailCache());
   sl.registerLazySingleton<ActiveSourceCubit>(
     () => ActiveSourceCubit(repository: sl()),
   );
@@ -93,7 +98,7 @@ Future<void> configureDependencies() async {
     () => HomeBloc(repository: sl(), libraryRepository: sl()),
   );
 
-  // ---- Trackers (AniList; MAL slot reserved for v1.3). ----
+  // ---- Trackers. ----
   sl.registerLazySingleton<AniListAuth>(() => AniListAuth());
   sl.registerLazySingleton<AniListApi>(
     () => AniListApi(dio: sl(), auth: sl()),
@@ -101,7 +106,17 @@ Future<void> configureDependencies() async {
   sl.registerLazySingleton<AniListTracker>(
     () => AniListTracker(api: sl(), auth: sl()),
   );
+  sl.registerLazySingleton<MalAuth>(() => MalAuth(dio: sl()));
+  sl.registerLazySingleton<MalApi>(
+    () => MalApi(dio: sl(), auth: sl()),
+  );
+  sl.registerLazySingleton<MalTracker>(
+    () => MalTracker(api: sl(), auth: sl()),
+  );
   sl.registerLazySingleton<TrackerRepository>(
-    () => TrackerRepository(trackers: <Tracker>[sl<AniListTracker>()]),
+    () => TrackerRepository(trackers: <Tracker>[
+      sl<AniListTracker>(),
+      sl<MalTracker>(),
+    ]),
   );
 }

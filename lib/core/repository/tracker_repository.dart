@@ -131,6 +131,10 @@ class TrackerRepository {
   }) async {
     try {
       final results = await tracker.searchByTitle(localTitle);
+      debugPrint(
+        'TrackerRepository.ensureMatched[${tracker.id}]: '
+        '"$localTitle" → ${results.length} candidates',
+      );
       if (results.isEmpty) return;
 
       TrackerEntry? best;
@@ -144,6 +148,11 @@ class TrackerRepository {
       }
 
       if (best == null) return;
+      debugPrint(
+        'TrackerRepository.ensureMatched[${tracker.id}]: '
+        'best="${best.title}" score=${bestScore.toStringAsFixed(2)} '
+        '(threshold $autoMatchThreshold)',
+      );
       if (bestScore < autoMatchThreshold) return;
 
       final match = TrackerMatch(
@@ -156,6 +165,10 @@ class TrackerRepository {
         matchedAt: DateTime.now(),
       );
       await _box.put(match.key, match.toJson());
+      debugPrint(
+        'TrackerRepository.ensureMatched[${tracker.id}]: matched '
+        '$sourceId/$bookId → remoteId=${best.remoteId}',
+      );
     } catch (e, st) {
       debugPrint(
         'TrackerRepository.ensureMatched[${tracker.id}] error: $e\n$st',

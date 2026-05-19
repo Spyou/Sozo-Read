@@ -25,6 +25,7 @@ import '../../features/settings/screens/storage_settings_screen.dart';
 import '../../features/settings/screens/trackers_settings_screen.dart';
 import '../di/injection.dart';
 import '../trackers/anilist/anilist_tracker.dart';
+import '../trackers/mal/mal_tracker.dart';
 import '../../features/sources/screens/sources_screen.dart';
 import '../../features/splash/screens/splash_screen.dart';
 import '../models/book_detail.dart';
@@ -70,6 +71,11 @@ String? parseSozoReadDeepLink(Uri uri) {
     if (service == 'anilist') {
       // ignore: discarded_futures
       sl<AniListTracker>().completeLoginFromCallback(uri);
+      return '/settings/trackers';
+    }
+    if (service == 'mal') {
+      // ignore: discarded_futures
+      sl<MalTracker>().completeLoginFromCallback(uri);
       return '/settings/trackers';
     }
   }

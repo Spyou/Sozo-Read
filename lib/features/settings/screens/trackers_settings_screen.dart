@@ -99,9 +99,15 @@ class _TrackersSettingsScreenState extends State<TrackersSettingsScreen>
     } catch (e) {
       if (!mounted) return;
       setState(() => _connecting.remove(tracker.id));
-      messenger.showSnackBar(
-        SnackBar(content: Text("Couldn't open browser: $e")),
-      );
+      // Surface the "no client ID configured" case as a clear, actionable
+      // message rather than a stack trace. Both AniList and MAL throw a
+      // typed exception with `ClientIdMissing` in the class name when
+      // the env var is unset.
+      final msg = e.toString().contains('ClientIdMissing')
+          ? "${tracker.displayName} isn't configured yet — set the client "
+              "ID in .env"
+          : "Couldn't open browser: $e";
+      messenger.showSnackBar(SnackBar(content: Text(msg)));
     }
     // We DON'T clear _connecting here on success — wait for the OAuth
     // round-trip to land in [_onTrackerAuthChanged]. If the user cancels

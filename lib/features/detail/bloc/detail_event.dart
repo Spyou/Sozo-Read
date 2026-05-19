@@ -9,11 +9,22 @@ abstract class DetailEvent extends Equatable {
 }
 
 class DetailLoaded extends DetailEvent {
-  const DetailLoaded({required this.sourceId, required this.url});
+  const DetailLoaded({
+    required this.sourceId,
+    required this.url,
+    this.bookId,
+  });
   final String sourceId;
   final String url;
+
+  /// Optional — passed when the caller already has the bookId on hand
+  /// (typically from the placeholder [BookItem] in `extra`). Lets the
+  /// bloc serve a cached [BookDetail] instantly without waiting for the
+  /// network round-trip. Falls back to a cache-miss when omitted.
+  final String? bookId;
+
   @override
-  List<Object?> get props => [sourceId, url];
+  List<Object?> get props => [sourceId, url, bookId];
 }
 
 class DetailReloaded extends DetailEvent {
