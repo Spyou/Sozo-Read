@@ -219,6 +219,33 @@ class ProviderReposRegistry {
     return uri.replace(path: '/$dir${source.file}').toString();
   }
 
+  /// Silently re-fetches every tracked repo's manifest in parallel and
+  /// stores the updated copies. Used at app launch so a source you
+  /// added to / removed from your repo propagates to users on the
+  /// next time they open the app — no manual refresh required.
+  ///
+  /// Fire-and-forget for the caller: errors are caught per-repo (so
+  /// one dead repo doesn't sink the rest) and logged via debugPrint.
+  /// Never throws.
+  Future<void> refreshAllInBackground() async {
+    final repos = getAll();
+    if (repos.isEmpty) return;
+    debugPrint(
+      'ProviderReposRegistry.refreshAllInBackground: '
+      'refreshing ${repos.length} repo(s)',
+    );
+    final ops = repos.map((r) async {
+      try {
+        await fetchAndCache(r.url);
+      } catch (e) {
+        debugPrint(
+          'ProviderReposRegistry.refreshAllInBackground[${r.url}] $e',
+        );
+      }
+    });
+    await Future.wait(ops);
+  }
+
   /// Seeds the registry with the app's default repo (Spyou's) at first
   /// launch. Idempotent — already-tracked URLs are left alone.
   ///

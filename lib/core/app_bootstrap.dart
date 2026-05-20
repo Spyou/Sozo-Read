@@ -86,6 +86,12 @@ class AppBootstrap {
       // ignore: discarded_futures
       sl<ProviderReposRegistry>().seedDefaultRepo(defaultRepo);
     }
+    // Silently refresh every tracked repo's manifest in the background
+    // so users see new / removed sources without needing to manually
+    // hit the refresh icon. Fire-and-forget; errors are swallowed per
+    // repo so one dead URL doesn't impact the rest of bootstrap.
+    // ignore: discarded_futures
+    sl<ProviderReposRegistry>().refreshAllInBackground();
     // Note: we do NOT call loadAll() here — that would try to download
     // providers from the placeholder GitHub URL and waste time. In dev,
     // main.dart calls loadBundledProviders() instead.
