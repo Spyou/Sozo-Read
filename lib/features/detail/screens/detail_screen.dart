@@ -406,7 +406,7 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
                   child: ElevatedButton.icon(
                     icon: const Icon(Icons.play_arrow_rounded, size: 22),
                     label: Text(
-                      lastChapterIndex > 0 && lastChapterIndex < book.chapters.length
+                      widget.readChapterIds.isNotEmpty
                           ? 'Continue reading'
                           : 'Start reading',
                       style: const TextStyle(
@@ -429,6 +429,18 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
                             ),
                   ),
                 ),
+                // Reading-progress bar. Hidden for never-opened series so a
+                // brand-new detail page stays clean; shows the moment you
+                // finish your first chapter.
+                if (widget.readChapterIds.isNotEmpty &&
+                    book.chapters.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: _ReadingProgress(
+                      readCount: widget.readChapterIds.length,
+                      totalCount: book.chapters.length,
+                    ),
+                  ),
                 // Tracker card (AniList). Hidden by default — surfaces only
                 // when the user taps the timeline icon in the app bar.
                 // The card owns its own horizontal margins so this slot
@@ -625,6 +637,89 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
         ],
       ),
       ),
+    );
+  }
+}
+
+/// Thin progress bar + caption shown under the Start Reading button on
+/// the detail screen. Communicates "how far through this series am I"
+/// at a glance — read count over total, with the percentage spelled out.
+///
+/// Capped at 100% in the visual so over-counted progress (e.g. a chapter
+/// id collision after a source restructures) doesn't render as a
+/// nonsense >100% caption.
+class _ReadingProgress extends StatelessWidget {
+  const _ReadingProgress({
+    required this.readCount,
+    required this.totalCount,
+  });
+
+  final int readCount;
+  final int totalCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = Theme.of(context).colorScheme.primary;
+    final clampedRead = readCount.clamp(0, totalCount);
+    final fraction = totalCount > 0 ? clampedRead / totalCount : 0.0;
+    final percent = (fraction * 100).round();
+    final isComplete = clampedRead == totalCount && totalCount > 0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: fraction,
+            minHeight: 4,
+            backgroundColor: AppColors.card,
+            valueColor: AlwaysStoppedAnimation<Color>(accent),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '$clampedRead of $totalCount chapters',
+                style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (isComplete)
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.check_circle_rounded, size: 12, color: accent),
+                  const SizedBox(width: 4),
+                  Text(
+                    '100%',
+                    style: TextStyle(
+                      color: accent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              )
+            else
+              Text(
+                '$percent%',
+                style: const TextStyle(
+                  color: AppColors.textTertiary,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+          ],
+        ),
+      ],
     );
   }
 }
