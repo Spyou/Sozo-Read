@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/widgets/app_snack.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/di/injection.dart';
@@ -118,7 +119,7 @@ class _TrackerStatusPillState extends State<TrackerStatusPill> {
     final on = names.length == 1
         ? names.first
         : '${names.take(names.length - 1).join(', ')} or ${names.last}';
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context).showAppSnack(
       SnackBar(
         content: Text("Couldn't find this manga on $on"),
         duration: const Duration(seconds: 3),
@@ -229,7 +230,7 @@ class _TrackerStatusPillState extends State<TrackerStatusPill> {
       await _refreshEntry(match);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnack(
         SnackBar(content: Text("Couldn't update status: $e")),
       );
     }
@@ -247,7 +248,7 @@ class _TrackerStatusPillState extends State<TrackerStatusPill> {
       await _refreshEntry(match);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnack(
         SnackBar(content: Text("Couldn't update score: $e")),
       );
     }
@@ -261,7 +262,7 @@ class _TrackerStatusPillState extends State<TrackerStatusPill> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnack(
         SnackBar(content: Text("Couldn't open browser: $e")),
       );
     }
@@ -306,7 +307,7 @@ class _TrackerStatusPillState extends State<TrackerStatusPill> {
       });
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnack(
         SnackBar(content: Text("Couldn't unlink: $e")),
       );
     }

@@ -5,6 +5,7 @@ import '../../features/home/bloc/home_bloc.dart';
 import '../provider/provider_downloader.dart';
 import '../provider/provider_manager.dart';
 import '../provider/provider_registry.dart';
+import '../provider/provider_repo_registry.dart';
 import '../repository/book_detail_cache.dart';
 import '../repository/chapter_bookmarks_repository.dart';
 import '../repository/chapter_thumbnails_repository.dart';
@@ -27,6 +28,7 @@ import '../services/notification_service.dart';
 import '../state/active_source_cubit.dart';
 import '../state/auth_service.dart';
 import '../state/chapter_sort_cubit.dart';
+import '../state/source_filter_cubit.dart';
 import '../state/manga_prefs_cubit.dart';
 import '../state/notifications_prefs_cubit.dart';
 import '../state/novel_prefs_cubit.dart';
@@ -56,6 +58,9 @@ Future<void> configureDependencies() async {
   sl.registerLazySingleton<ProviderRegistry>(
     () => ProviderRegistry(downloader: sl(), manager: sl()),
   );
+  sl.registerLazySingleton<ProviderReposRegistry>(
+    () => ProviderReposRegistry(dio: sl()),
+  );
   sl.registerLazySingleton<ProviderRepository>(
     () => ProviderRepository(manager: sl(), registry: sl()),
   );
@@ -81,6 +86,7 @@ Future<void> configureDependencies() async {
   sl.registerLazySingleton<NovelPrefsCubit>(() => NovelPrefsCubit());
   sl.registerLazySingleton<MangaPrefsCubit>(() => MangaPrefsCubit());
   sl.registerLazySingleton<ChapterSortCubit>(() => ChapterSortCubit());
+  sl.registerLazySingleton<SourceFilterCubit>(() => SourceFilterCubit());
   sl.registerLazySingleton<AuthService>(() => AuthService());
   sl.registerLazySingleton<CloudinaryService>(
     () => CloudinaryService(dio: sl()),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/widgets/app_snack.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
@@ -37,7 +38,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     final chapterIndex =
         book.chapters.indexWhere((c) => c.id == entry.chapterId);
     if (chapterIndex < 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnack(
         const SnackBar(content: Text('Chapter no longer in the book.')),
       );
       return;

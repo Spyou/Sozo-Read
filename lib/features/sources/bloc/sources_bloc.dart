@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:hive/hive.dart';
 
 import '../../../core/provider/provider_manager.dart';
 import '../../../core/provider/provider_registry.dart';
@@ -19,10 +22,26 @@ class SourcesBloc extends Bloc<SourcesEvent, SourcesState> {
     on<SourceUninstalled>(_onUninstalled);
     on<SourceUpdated>(_onUpdated);
     on<SourceHealthReset>(_onHealthReset);
+    // Subscribe to the providers Hive box so the Installed tab refreshes
+    // automatically when ANY caller changes the registry — including the
+    // Repos tab's per-source install/uninstall buttons that call the
+    // registry directly. Without this the Installed tab stayed in sync
+    // only when the change came via a SourcesEvent.
+    final box = Hive.box<Map>(ProviderRegistry.boxName);
+    _boxSub = box.watch().listen((_) {
+      if (!isClosed) add(const SourcesRefreshed());
+    });
   }
 
   final ProviderRegistry _registry;
   final ProviderRepository _repo;
+  StreamSubscription<BoxEvent>? _boxSub;
+
+  @override
+  Future<void> close() async {
+    await _boxSub?.cancel();
+    return super.close();
+  }
 
   Future<void> _onStarted(SourcesStarted event, Emitter<SourcesState> emit) => _load(emit);
   Future<void> _onRefreshed(SourcesRefreshed event, Emitter<SourcesState> emit) => _load(emit);

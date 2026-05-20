@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import '../../../core/widgets/app_snack.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -79,12 +80,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
       );
       await _auth.updateProfile(avatarUrl: url);
       if (!mounted) return;
-      messenger.showSnackBar(
+      messenger.showAppSnack(
         const SnackBar(content: Text('Profile picture updated.')),
       );
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+      messenger.showAppSnack(SnackBar(content: Text('Upload failed: $e')));
     } finally {
       if (mounted) setState(() => _uploading = false);
     }
@@ -99,12 +100,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       await _auth.updateProfile(displayName: name);
       if (!mounted) return;
-      messenger.showSnackBar(
+      messenger.showAppSnack(
         const SnackBar(content: Text('Name updated.')),
       );
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      messenger.showAppSnack(SnackBar(content: Text('Save failed: $e')));
     } finally {
       if (mounted) setState(() => _savingName = false);
     }
@@ -160,12 +161,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   try {
                     await _auth.updateProfile(avatarUrl: '');
                     if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    ScaffoldMessenger.of(context).showAppSnack(
                       const SnackBar(content: Text('Removed.')),
                     );
                   } catch (e) {
                     if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    ScaffoldMessenger.of(context).showAppSnack(
                       SnackBar(content: Text('Remove failed: $e')),
                     );
                   }
@@ -212,7 +213,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Sign-out failed: $e')));
+          .showAppSnack(SnackBar(content: Text('Sign-out failed: $e')));
     }
   }
 

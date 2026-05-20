@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import '../../../core/widgets/app_snack.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hive/hive.dart';
@@ -70,7 +71,7 @@ class _DetailView extends StatelessWidget {
     // requirement inline instead of silently writing a local-only entry
     // that would be wiped on the next sign-in.
     if (!sl<AuthService>().isSignedIn) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnack(
         SnackBar(
           content: const Text('Sign in to save manga to your library.'),
           action: SnackBarAction(
@@ -1488,12 +1489,12 @@ class _ChapterDownloadButton extends StatelessWidget {
       final res =
           await providerRepo.novelContent(book.sourceId, chapter.url);
       res.fold(
-        (f) => messenger.showSnackBar(
+        (f) => messenger.showAppSnack(
           SnackBar(content: Text('Download failed: ${f.message}')),
         ),
         (content) async {
           if (content.text.trim().isEmpty) {
-            messenger.showSnackBar(
+            messenger.showAppSnack(
               const SnackBar(content: Text('Chapter is empty — nothing to save.')),
             );
             return;
@@ -1504,7 +1505,7 @@ class _ChapterDownloadButton extends StatelessWidget {
             text: content.text,
             nextChapterUrl: content.nextUrl,
           );
-          messenger.showSnackBar(
+          messenger.showAppSnack(
             SnackBar(content: Text('Saved ${chapter.title} for offline')),
           );
         },
@@ -1515,12 +1516,12 @@ class _ChapterDownloadButton extends StatelessWidget {
     // Manga path — fetch image URLs then stream each one to disk.
     final pagesRes = await providerRepo.pages(book.sourceId, chapter.url);
     pagesRes.fold(
-      (f) => messenger.showSnackBar(
+      (f) => messenger.showAppSnack(
         SnackBar(content: Text('Failed to fetch pages: ${f.message}')),
       ),
       (pages) {
         if (pages.isEmpty) {
-          messenger.showSnackBar(
+          messenger.showAppSnack(
             const SnackBar(content: Text('No pages to download')),
           );
           return;
@@ -1528,7 +1529,7 @@ class _ChapterDownloadButton extends StatelessWidget {
         // Fire-and-forget; the repo emits via watch().
         // ignore: discarded_futures
         repo.enqueue(book, chapter, pages, dio);
-        messenger.showSnackBar(
+        messenger.showAppSnack(
           SnackBar(content: Text('Downloading ${chapter.title}…')),
         );
       },
@@ -1539,7 +1540,7 @@ class _ChapterDownloadButton extends StatelessWidget {
     final repo = sl<DownloadsRepository>();
     await repo.delete(book.sourceId, book.id, chapter.id);
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context).showAppSnack(
       const SnackBar(content: Text('Download deleted')),
     );
   }
@@ -1548,7 +1549,7 @@ class _ChapterDownloadButton extends StatelessWidget {
     final repo = sl<DownloadsRepository>();
     await repo.cancel(book.sourceId, book.id, chapter.id);
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context).showAppSnack(
       const SnackBar(content: Text('Download cancelled')),
     );
   }
@@ -1614,7 +1615,7 @@ class _ChapterDownloadButton extends StatelessWidget {
                 : effective.completed / effective.total;
             return GestureDetector(
               onLongPress: () => _cancel(context),
-              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+              onTap: () => ScaffoldMessenger.of(context).showAppSnack(
                 SnackBar(
                   content: Text(
                     'Downloading… ${effective.completed}/${effective.total}',
@@ -1844,7 +1845,7 @@ class _ChapterBookmarkButton extends StatelessWidget {
     if (isBookmarked) {
       await repo.remove(book.sourceId, book.id, chapter.id);
       messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(
+      messenger.showAppSnack(
         SnackBar(
           content: const Text('Bookmark removed'),
           duration: const Duration(seconds: 3),
@@ -1864,7 +1865,7 @@ class _ChapterBookmarkButton extends StatelessWidget {
       // flow.
       _prefetchThumbnail(book, chapter);
       messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(
+      messenger.showAppSnack(
         SnackBar(
           content: Text('Bookmarked ${chapter.title}'),
           duration: const Duration(seconds: 3),
@@ -2010,7 +2011,7 @@ class _BookmarksTabState extends State<_BookmarksTab> {
     final messenger = ScaffoldMessenger.of(context);
     await repo.remove(b.sourceId, b.bookId, b.chapterId);
     messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
+    messenger.showAppSnack(
       SnackBar(
         content: const Text('Bookmark removed'),
         duration: const Duration(seconds: 3),
@@ -2113,7 +2114,7 @@ class _BookmarksTabState extends State<_BookmarksTab> {
       pageIndex: b.pageIndex,
     );
     messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
+    messenger.showAppSnack(
       SnackBar(
         content: const Text('Bookmark removed'),
         duration: const Duration(seconds: 3),

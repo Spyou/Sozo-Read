@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'app_snack.dart';
 
 import '../di/injection.dart';
 import '../models/provider_info.dart';
@@ -14,7 +15,7 @@ Future<String?> showSourcePicker(BuildContext context) async {
   final cubit = sl<ActiveSourceCubit>();
   final providers = sl<ProviderRepository>().providers;
   if (providers.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context).showAppSnack(
       const SnackBar(content: Text('No providers installed.')),
     );
     return null;

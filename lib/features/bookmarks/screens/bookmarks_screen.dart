@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import '../../../core/widgets/app_snack.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hive/hive.dart';
 
@@ -96,7 +97,7 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
     final messenger = ScaffoldMessenger.of(context);
     await repo.remove(b.sourceId, b.bookId, b.chapterId);
     messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
+    messenger.showAppSnack(
       SnackBar(
         content: const Text('Bookmark removed'),
         duration: const Duration(seconds: 3),
@@ -119,7 +120,7 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
       pageIndex: b.pageIndex,
     );
     messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
+    messenger.showAppSnack(
       SnackBar(
         content: const Text('Bookmark removed'),
         duration: const Duration(seconds: 3),

@@ -41,7 +41,13 @@ class LibraryBloc extends Bloc<LibraryEvent, LibraryState> {
   }
 
   void _onTabChanged(LibraryTabChanged event, Emitter<LibraryState> emit) {
-    emit(state.copyWith(tab: event.status));
+    // `event.status == null` selects the "All" tab — route through
+    // clearTab so copyWith's `??` fallback doesn't preserve the prior
+    // tab.
+    emit(state.copyWith(
+      tab: event.status,
+      clearTab: event.status == null,
+    ));
   }
 
   Future<void> _onRemoved(LibraryRemoved event, Emitter<LibraryState> emit) async {

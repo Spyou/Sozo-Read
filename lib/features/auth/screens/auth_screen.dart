@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import '../../../core/widgets/app_snack.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -63,25 +64,25 @@ class _AuthScreenState extends State<AuthScreen> {
     final isSignUp = _mode == AuthMode.signUp;
 
     if (isSignUp && name.isEmpty) {
-      messenger.showSnackBar(
+      messenger.showAppSnack(
         const SnackBar(content: Text('Please enter your name')),
       );
       return;
     }
     if (!_isValidEmail(email)) {
-      messenger.showSnackBar(
+      messenger.showAppSnack(
         const SnackBar(content: Text('Enter a valid email address')),
       );
       return;
     }
     if (password.length < 6) {
-      messenger.showSnackBar(
+      messenger.showAppSnack(
         const SnackBar(content: Text('Password must be at least 6 characters')),
       );
       return;
     }
     if (isSignUp && password != confirm) {
-      messenger.showSnackBar(
+      messenger.showAppSnack(
         const SnackBar(content: Text('Passwords don\'t match')),
       );
       return;
@@ -107,7 +108,7 @@ class _AuthScreenState extends State<AuthScreen> {
             // ignore: avoid_print
             print('[auth-ui] cloudinary upload failed: $e');
             if (!mounted) return;
-            messenger.showSnackBar(
+            messenger.showAppSnack(
               SnackBar(content: Text('Picture upload failed: $e')),
             );
             // Stop here — we want the user to retry or remove the image so
@@ -136,7 +137,7 @@ class _AuthScreenState extends State<AuthScreen> {
         // confirmation is re-enabled later or signUp silently returns no
         // session.
         if (_auth.isSignedIn) {
-          messenger.showSnackBar(
+          messenger.showAppSnack(
             SnackBar(content: Text('Welcome, ${name.split(' ').first}!')),
           );
           if (context.canPop()) {
@@ -145,7 +146,7 @@ class _AuthScreenState extends State<AuthScreen> {
             context.go('/settings');
           }
         } else {
-          messenger.showSnackBar(
+          messenger.showAppSnack(
             const SnackBar(
               content: Text('Account created. You can sign in now.'),
               duration: Duration(seconds: 4),
@@ -167,7 +168,7 @@ class _AuthScreenState extends State<AuthScreen> {
         // ignore: avoid_print
         print('[auth-ui] signIn returned ok');
         if (!mounted) return;
-        messenger.showSnackBar(const SnackBar(content: Text('Signed in.')));
+        messenger.showAppSnack(const SnackBar(content: Text('Signed in.')));
         if (context.canPop()) {
           context.pop();
         } else {
@@ -176,7 +177,7 @@ class _AuthScreenState extends State<AuthScreen> {
       }
     } on TimeoutException catch (_) {
       if (!mounted) return;
-      messenger.showSnackBar(
+      messenger.showAppSnack(
         const SnackBar(
           content: Text(
             'This is taking too long. Check your connection and try again.',
@@ -188,7 +189,7 @@ class _AuthScreenState extends State<AuthScreen> {
       print('[auth-ui] submit failed: $e');
       if (!mounted) return;
       final msg = e.toString().replaceFirst('AuthApiException: ', '');
-      messenger.showSnackBar(SnackBar(content: Text(msg)));
+      messenger.showAppSnack(SnackBar(content: Text(msg)));
     } finally {
       if (mounted) {
         setState(() {
@@ -214,7 +215,7 @@ class _AuthScreenState extends State<AuthScreen> {
       setState(() => _avatarFile = File(picked.path));
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(SnackBar(content: Text('Picker failed: $e')));
+      messenger.showAppSnack(SnackBar(content: Text('Picker failed: $e')));
     }
   }
 
@@ -281,7 +282,7 @@ class _AuthScreenState extends State<AuthScreen> {
     final email = _email.text.trim();
     final messenger = ScaffoldMessenger.of(context);
     if (!_isValidEmail(email)) {
-      messenger.showSnackBar(
+      messenger.showAppSnack(
         const SnackBar(content: Text('Enter your email first')),
       );
       return;
@@ -289,12 +290,12 @@ class _AuthScreenState extends State<AuthScreen> {
     try {
       await _auth.sendPasswordReset(email);
       if (!mounted) return;
-      messenger.showSnackBar(
+      messenger.showAppSnack(
         const SnackBar(content: Text('Password-reset email sent.')),
       );
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(SnackBar(content: Text('Reset failed: $e')));
+      messenger.showAppSnack(SnackBar(content: Text('Reset failed: $e')));
     }
   }
 

@@ -51,13 +51,17 @@ extension LibrarySortX on LibrarySort {
 
 class LibraryState extends Equatable {
   final List<LibraryEntry> entries;
-  final LibraryStatus tab;
+
+  /// Active status filter, or `null` for "All" (every entry regardless
+  /// of status). Defaults to `null` so a fresh library view doesn't
+  /// hide everything not in Reading.
+  final LibraryStatus? tab;
   final String query;
   final LibrarySort sort;
 
   const LibraryState({
     this.entries = const [],
-    this.tab = LibraryStatus.reading,
+    this.tab,
     this.query = '',
     this.sort = LibrarySort.recentlyUpdated,
   });
@@ -65,12 +69,13 @@ class LibraryState extends Equatable {
   LibraryState copyWith({
     List<LibraryEntry>? entries,
     LibraryStatus? tab,
+    bool clearTab = false,
     String? query,
     LibrarySort? sort,
   }) =>
       LibraryState(
         entries: entries ?? this.entries,
-        tab: tab ?? this.tab,
+        tab: clearTab ? null : (tab ?? this.tab),
         query: query ?? this.query,
         sort: sort ?? this.sort,
       );
@@ -78,7 +83,9 @@ class LibraryState extends Equatable {
   List<LibraryEntry> get filtered {
     final q = query.trim().toLowerCase();
     final base = entries.where((e) {
-      if (e.status != tab) return false;
+      // `tab == null` means "All" — show every entry regardless of
+      // status. Otherwise filter to the selected status bucket.
+      if (tab != null && e.status != tab) return false;
       if (q.isEmpty) return true;
       return e.book.title.toLowerCase().contains(q);
     }).toList();

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import '../../../../core/widgets/app_snack.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:hive/hive.dart';
@@ -274,7 +275,7 @@ class _PageImageState extends State<PageImage> {
         pageIndex: widget.pageIndex,
       );
       messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(
+      messenger.showAppSnack(
         const SnackBar(content: Text('Bookmark removed')),
       );
     } else {
@@ -286,7 +287,7 @@ class _PageImageState extends State<PageImage> {
         pageUrl: widget.page.url,
       );
       messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(
+      messenger.showAppSnack(
         SnackBar(content: Text('Bookmarked page ${widget.pageIndex + 1}')),
       );
     }
@@ -321,11 +322,11 @@ class _PageImageState extends State<PageImage> {
       );
       if (!mounted) return;
       if (result.isSuccess) {
-        messenger.showSnackBar(
+        messenger.showAppSnack(
           const SnackBar(content: Text('Saved to gallery')),
         );
       } else {
-        messenger.showSnackBar(
+        messenger.showAppSnack(
           SnackBar(
             content: Text('Save failed: ${result.errorMessage ?? 'unknown'}'),
           ),
@@ -334,7 +335,7 @@ class _PageImageState extends State<PageImage> {
     } catch (e) {
       debugPrint('PageImage save failed: $e');
       if (!mounted) return;
-      messenger.showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      messenger.showAppSnack(SnackBar(content: Text('Save failed: $e')));
     }
   }
 
@@ -397,7 +398,7 @@ class _PageImageState extends State<PageImage> {
     final messenger = ScaffoldMessenger.of(context);
     await Clipboard.setData(ClipboardData(text: widget.page.url));
     if (!mounted) return;
-    messenger.showSnackBar(
+    messenger.showAppSnack(
       const SnackBar(content: Text('Image URL copied')),
     );
   }

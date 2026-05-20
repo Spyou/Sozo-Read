@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/widgets/app_snack.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../widgets/settings_widgets.dart';
@@ -123,7 +124,7 @@ class AboutSettingsScreen extends StatelessWidget {
       }
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnack(
         SnackBar(content: Text("Couldn't open Telegram: $e")),
       );
     }

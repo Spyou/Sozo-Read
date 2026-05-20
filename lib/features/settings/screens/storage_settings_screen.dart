@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import '../../../core/widgets/app_snack.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../widgets/settings_widgets.dart';
@@ -62,7 +63,7 @@ class _StorageSettingsScreenState extends State<StorageSettingsScreen> {
     } catch (_) {/* best-effort */}
     await CachedNetworkImage.evictFromCache('');
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context).showAppSnack(
       const SnackBar(content: Text('Image cache cleared')),
     );
     _refresh();

@@ -15,7 +15,10 @@ class LibraryStarted extends LibraryEvent {
 
 class LibraryTabChanged extends LibraryEvent {
   const LibraryTabChanged(this.status);
-  final LibraryStatus status;
+
+  /// `null` selects the "All" tab — every library entry regardless of
+  /// its status bucket.
+  final LibraryStatus? status;
   @override
   List<Object?> get props => [status];
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../../core/widgets/app_snack.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 
@@ -79,7 +80,7 @@ class _NovelViewState extends State<_NovelView> {
       LibraryStatus.completed,
     );
     if (!context.mounted) return;
-    messenger.showSnackBar(
+    messenger.showAppSnack(
       SnackBar(
         content: const Text('Marked as completed'),
         action: SnackBarAction(

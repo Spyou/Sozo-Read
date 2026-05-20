@@ -3,6 +3,7 @@ import 'dart:ui';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import '../../../../core/widgets/app_snack.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -888,7 +889,7 @@ class _ReaderViewState extends State<_ReaderView>
       LibraryStatus.completed,
     );
     if (!mounted) return;
-    messenger.showSnackBar(
+    messenger.showAppSnack(
       SnackBar(
         content: const Text('Marked as completed'),
         action: SnackBarAction(
@@ -1952,19 +1953,19 @@ class _ReaderDownloadButton extends StatelessWidget {
     final pagesRes = await providerRepo.pages(book.sourceId, chapter.url);
     if (!context.mounted) return;
     pagesRes.fold(
-      (f) => messenger.showSnackBar(
+      (f) => messenger.showAppSnack(
         SnackBar(content: Text('Failed to fetch pages: ${f.message}')),
       ),
       (pages) {
         if (pages.isEmpty) {
-          messenger.showSnackBar(
+          messenger.showAppSnack(
             const SnackBar(content: Text('No pages to download')),
           );
           return;
         }
         // ignore: discarded_futures
         repo.enqueue(book, chapter, pages, dio);
-        messenger.showSnackBar(
+        messenger.showAppSnack(
           SnackBar(content: Text('Downloading ${chapter.title}…')),
         );
       },

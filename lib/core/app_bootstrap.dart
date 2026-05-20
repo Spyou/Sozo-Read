@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'di/injection.dart';
 import 'provider/provider_downloader.dart';
 import 'provider/provider_registry.dart';
+import 'provider/provider_repo_registry.dart';
 import 'repository/book_detail_cache.dart';
 import 'repository/chapter_bookmarks_repository.dart';
 import 'repository/chapter_thumbnails_repository.dart';
@@ -50,6 +51,7 @@ class AppBootstrap {
     await Hive.initFlutter();
     await ProviderDownloader.init();
     await ProviderRegistry.init();
+    await ProviderReposRegistry.init();
     await LibraryRepository.init();
     await ReadChaptersRepository.init();
     await DownloadsRepository.init();
@@ -75,6 +77,15 @@ class AppBootstrap {
     sl<NovelPrefsCubit>();
     sl<MangaPrefsCubit>();
     await sl<ProviderRegistry>().seedDefaults();
+    // Seed the default Provider repo (Spyou's manifest) at first
+    // launch. Idempotent — subsequent launches are a no-op when the
+    // URL is already tracked. Fire-and-forget so a slow first-launch
+    // network call doesn't delay the splash.
+    final defaultRepo = dotenv.maybeGet('DEFAULT_PROVIDER_REPO')?.trim();
+    if (defaultRepo != null && defaultRepo.isNotEmpty) {
+      // ignore: discarded_futures
+      sl<ProviderReposRegistry>().seedDefaultRepo(defaultRepo);
+    }
     // Note: we do NOT call loadAll() here — that would try to download
     // providers from the placeholder GitHub URL and waste time. In dev,
     // main.dart calls loadBundledProviders() instead.

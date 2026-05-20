@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/widgets/app_snack.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/di/injection.dart';
@@ -68,7 +69,7 @@ class _TrackersSettingsScreenState extends State<TrackersSettingsScreen>
         // celebrate. Username may still be in-flight; the row will
         // re-render again when the next authChanges fires.
         _connecting.remove(tracker.id);
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context).showAppSnack(
           SnackBar(
             content: Text('Connected to ${tracker.displayName}'),
             duration: const Duration(seconds: 2),
@@ -107,7 +108,7 @@ class _TrackersSettingsScreenState extends State<TrackersSettingsScreen>
           ? "${tracker.displayName} isn't configured yet — set the client "
               "ID in .env"
           : "Couldn't open browser: $e";
-      messenger.showSnackBar(SnackBar(content: Text(msg)));
+      messenger.showAppSnack(SnackBar(content: Text(msg)));
     }
     // We DON'T clear _connecting here on success — wait for the OAuth
     // round-trip to land in [_onTrackerAuthChanged]. If the user cancels

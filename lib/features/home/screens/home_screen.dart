@@ -2,6 +2,7 @@ import 'dart:math';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import '../../../core/widgets/app_snack.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -97,7 +98,7 @@ class _HomeViewState extends State<_HomeView> {
       }
     }
     if (pool.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnack(
         const SnackBar(content: Text('Loading content — try again in a moment')),
       );
       return;

@@ -31,7 +31,10 @@ class LibraryScreen extends StatelessWidget {
 class _LibraryView extends StatelessWidget {
   const _LibraryView();
 
-  static const _tabs = [
+  /// Tab list — `null` is the "All" tab (no status filter). Other
+  /// tuples filter to that exact status bucket.
+  static const _tabs = <(LibraryStatus?, String)>[
+    (null, 'All'),
     (LibraryStatus.reading, 'Reading'),
     (LibraryStatus.completed, 'Completed'),
     (LibraryStatus.onHold, 'On Hold'),

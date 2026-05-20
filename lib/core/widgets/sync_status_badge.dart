@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'app_snack.dart';
 
 import '../di/injection.dart';
 import '../state/auth_service.dart';
@@ -60,7 +61,7 @@ class _SyncStatusBadgeState extends State<SyncStatusBadge> {
               ),
               onPressed: () {
                 final err = _sync.lastError ?? 'Unknown error';
-                ScaffoldMessenger.of(context).showSnackBar(
+                ScaffoldMessenger.of(context).showAppSnack(
                   SnackBar(
                     content: Text('Sync failed: $err'),
                     action: SnackBarAction(
