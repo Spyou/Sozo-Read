@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:hive/hive.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shimmer/shimmer.dart';
 
@@ -13,8 +16,11 @@ import '../../../core/models/book_item.dart';
 import '../../../core/models/chapter.dart';
 import '../../../core/models/provider_info.dart';
 import '../../../core/repository/book_detail_cache.dart';
+import '../../../core/repository/chapter_bookmarks_repository.dart';
+import '../../../core/repository/chapter_thumbnails_repository.dart';
 import '../../../core/repository/downloads_repository.dart';
 import '../../../core/repository/library_repository.dart';
+import '../../../core/repository/page_bookmarks_repository.dart';
 import '../../../core/repository/provider_repository.dart';
 import '../../../core/repository/read_chapters_repository.dart';
 import '../../../core/state/auth_service.dart';
@@ -108,7 +114,12 @@ class _DetailView extends StatelessWidget {
     await Share.share(shareText, subject: book.title);
   }
 
-  void _openReader(BuildContext context, BookDetail book, int chapterIndex) {
+  void _openReader(
+    BuildContext context,
+    BookDetail book,
+    int chapterIndex, {
+    int? initialPageIndex,
+  }) {
     final isManga = book.type.name != 'novel';
     context.pushNamed(
       isManga ? 'manga-reader' : 'novel-reader',
@@ -116,6 +127,7 @@ class _DetailView extends StatelessWidget {
       extra: {
         'book': book,
         'chapterIndex': chapterIndex,
+        'initialPageIndex': ?initialPageIndex,
       },
     );
   }
@@ -147,6 +159,8 @@ class _DetailView extends StatelessWidget {
             onToggleLibrary: () => _handleToggleLibrary(context),
             onShare: () => _handleShare(context, book),
             onOpenChapter: (i) => _openReader(context, book, i),
+            onOpenChapterAtPage: (i, page) =>
+                _openReader(context, book, i, initialPageIndex: page),
           );
         },
       ),
@@ -165,6 +179,7 @@ class _DetailBody extends StatefulWidget {
     required this.onToggleLibrary,
     required this.onShare,
     required this.onOpenChapter,
+    required this.onOpenChapterAtPage,
   });
 
   final BookDetail book;
@@ -177,12 +192,17 @@ class _DetailBody extends StatefulWidget {
   final VoidCallback onShare;
   final void Function(int chapterIndex) onOpenChapter;
 
+  /// Used by the Bookmarks tab when the user taps a page bookmark — the
+  /// reader needs both the chapter index AND the bookmark's page index
+  /// so it lands on the exact saved page, not the chapter's beginning.
+  final void Function(int chapterIndex, int pageIndex) onOpenChapterAtPage;
+
   @override
   State<_DetailBody> createState() => _DetailBodyState();
 }
 
 class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderStateMixin {
-  late final TabController _tabController = TabController(length: 3, vsync: this);
+  late final TabController _tabController = TabController(length: 4, vsync: this);
 
   static const double _expandedHeight = 340;
   // Show the app-bar title once the user has scrolled past the cover.
@@ -197,6 +217,16 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
   final TextEditingController _chapterSearchController = TextEditingController();
   bool _chapterSearchExpanded = false;
   String _chapterSearchQuery = '';
+
+  // Memoized chapter display list. Filter+sort over a 1000+ chapter list
+  // is cheap individually (sub-ms) but compounds when BlocBuilder rebuilds
+  // fire on every search keystroke or progress event. Cache the result
+  // against (book identity, sort direction, query) so repeated rebuilds
+  // with identical inputs return the same list without re-walking.
+  List<({int originalIndex, Chapter chapter})>? _displayCache;
+  String? _displayCacheBookKey;
+  bool? _displayCacheAscending;
+  String? _displayCacheQuery;
 
   bool _onScroll(ScrollNotification n) {
     // Only react to vertical scrolls in the outer (header) viewport.
@@ -251,29 +281,56 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
   /// the book's chapters and returns the display list. Each entry knows
   /// its original index so taps still map back to the bloc's
   /// newest-first chapterIndex world.
+  ///
+  /// Memoized — when the (book, ascending, query) tuple is unchanged
+  /// from the previous call, the cached list is returned without
+  /// re-walking the chapters. BlocBuilder triggers a rebuild on every
+  /// state mutation (chapter-read updates, library writes, etc.) so the
+  /// hit rate is high during normal use.
   List<({int originalIndex, Chapter chapter})> _buildChapterDisplay(
     BookDetail book,
     bool ascending,
   ) {
+    // Book identity = sourceId + bookId + chapters.length. The length
+    // guards against in-place chapter-list growth (pull-to-refresh adds
+    // a new chapter) — counting bytes here would be slower than just
+    // rebuilding.
+    final bookKey = '${book.sourceId}::${book.id}::${book.chapters.length}';
+    final q = _chapterSearchQuery.trim().toLowerCase();
+    if (_displayCache != null &&
+        _displayCacheBookKey == bookKey &&
+        _displayCacheAscending == ascending &&
+        _displayCacheQuery == q) {
+      return _displayCache!;
+    }
+
     final indexed = List.generate(
       book.chapters.length,
       (i) => (originalIndex: i, chapter: book.chapters[i]),
     );
     // Source returns chapters newest-first. Ascending = oldest-first, so
     // we reverse the list. Descending keeps the source order.
-    final ordered =
-        ascending ? indexed.reversed.toList() : indexed;
-    final q = _chapterSearchQuery.trim().toLowerCase();
-    if (q.isEmpty) return ordered;
-    return ordered.where((e) {
-      final title = e.chapter.title.toLowerCase();
-      if (title.contains(q)) return true;
-      // Number-only match as a fallback (titles vary widely between
-      // sources; some don't include the chapter number at all).
-      final num = e.chapter.number;
-      if (num != null && num.toString().contains(q)) return true;
-      return false;
-    }).toList();
+    final ordered = ascending ? indexed.reversed.toList() : indexed;
+    final List<({int originalIndex, Chapter chapter})> result;
+    if (q.isEmpty) {
+      result = ordered;
+    } else {
+      result = ordered.where((e) {
+        final title = e.chapter.title.toLowerCase();
+        if (title.contains(q)) return true;
+        // Number-only match as a fallback (titles vary widely between
+        // sources; some don't include the chapter number at all).
+        final num = e.chapter.number;
+        if (num != null && num.toString().contains(q)) return true;
+        return false;
+      }).toList();
+    }
+
+    _displayCache = result;
+    _displayCacheBookKey = bookKey;
+    _displayCacheAscending = ascending;
+    _displayCacheQuery = q;
+    return result;
   }
 
   @override
@@ -461,40 +518,12 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
         SliverPersistentHeader(
           pinned: true,
           delegate: _TabBarDelegate(
-            TabBar(
+            _BookmarkAwareTabBar(
               controller: _tabController,
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              labelPadding: const EdgeInsets.symmetric(horizontal: 14),
-              labelColor: Theme.of(context).colorScheme.primary,
-              unselectedLabelColor: AppColors.textTertiary,
-              indicatorSize: TabBarIndicatorSize.label,
-              indicator: UnderlineTabIndicator(
-                borderSide: BorderSide(
-                  color: Theme.of(context).colorScheme.primary,
-                  width: 2,
-                ),
-                insets: const EdgeInsets.symmetric(horizontal: 2),
-              ),
-              dividerHeight: 0,
-              splashFactory: NoSplash.splashFactory,
-              overlayColor: WidgetStateProperty.all(Colors.transparent),
-              labelStyle: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.2,
-              ),
-              unselectedLabelStyle: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.2,
-              ),
-              tabs: [
-                Tab(text: 'Chapters (${book.chapters.length})'),
-                const Tab(text: 'More like this'),
-                const Tab(text: 'Details'),
-              ],
+              chapterCount: book.chapters.length,
+              sourceId: book.sourceId,
+              bookId: book.id,
+              accent: Theme.of(context).colorScheme.primary,
             ),
           ),
         ),
@@ -541,6 +570,14 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
                                     icon: Icons.search_off_rounded,
                                     message: 'No chapters match this search.',
                                   )
+                                // Thumbnail subscription has been pushed
+                                // DOWN into each [_ChapterThumbnail] —
+                                // wrapping the whole list in a watch
+                                // stream rebuilt all visible rows on
+                                // every thumbnail write, expensive in a
+                                // 1000-chapter scroll path. Per-row
+                                // listeners filter by chapterId and only
+                                // the affected row rebuilds.
                                 : ListView.separated(
                                     physics:
                                         const AlwaysScrollableScrollPhysics(),
@@ -571,7 +608,24 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
                                       );
                                       return ListTile(
                                         dense: true,
+                                        contentPadding:
+                                            const EdgeInsets.symmetric(
+                                                vertical: 4, horizontal: 16),
                                         onTap: () => onOpenChapter(i),
+                                        leading: Opacity(
+                                          opacity: read ? 0.5 : 1.0,
+                                          child: _ChapterThumbnail(
+                                            // `url: null` triggers the
+                                            // widget's own self-watch
+                                            // against the repo for THIS
+                                            // chapterId only.
+                                            url: null,
+                                            fallbackUrl: book.cover,
+                                            sourceId: book.sourceId,
+                                            bookId: book.id,
+                                            chapter: ch,
+                                          ),
+                                        ),
                                         title: Opacity(
                                           opacity: read ? 0.5 : 1.0,
                                           child: titleText,
@@ -589,27 +643,25 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
                                                 ),
                                               )
                                             : null,
-                                        trailing: SizedBox(
-                                          width: 64,
-                                          child: Row(
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.end,
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              if (i == lastChapterIndex)
-                                                const Padding(
-                                                  padding: EdgeInsets.only(
-                                                      right: 4),
-                                                  child: Icon(
-                                                      Icons.play_circle,
-                                                      color:
-                                                          AppColors.primary,
-                                                      size: 20),
-                                                ),
-                                              _ChapterDownloadButton(
-                                                  book: book, chapter: ch),
-                                            ],
-                                          ),
+                                        trailing: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.end,
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            if (i == lastChapterIndex)
+                                              const Padding(
+                                                padding: EdgeInsets.only(
+                                                    right: 4),
+                                                child: Icon(
+                                                    Icons.play_circle,
+                                                    color: AppColors.primary,
+                                                    size: 18),
+                                              ),
+                                            _ChapterBookmarkButton(
+                                                book: book, chapter: ch),
+                                            _ChapterDownloadButton(
+                                                book: book, chapter: ch),
+                                          ],
                                         ),
                                       );
                                     },
@@ -633,6 +685,12 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
           _DetailsTab(
             book: book,
             onOpenGenre: (g) => _openGenre(context, g),
+          ),
+          // ---- Bookmarks ----
+          _BookmarksTab(
+            book: book,
+            onOpenChapter: onOpenChapter,
+            onOpenChapterAtPage: widget.onOpenChapterAtPage,
           ),
         ],
       ),
@@ -849,7 +907,7 @@ class _ChapterListHeader extends StatelessWidget {
 
 class _TabBarDelegate extends SliverPersistentHeaderDelegate {
   _TabBarDelegate(this.tabBar);
-  final TabBar tabBar;
+  final PreferredSizeWidget tabBar;
 
   @override
   double get minExtent => tabBar.preferredSize.height;
@@ -868,6 +926,97 @@ class _TabBarDelegate extends SliverPersistentHeaderDelegate {
   @override
   bool shouldRebuild(covariant _TabBarDelegate oldDelegate) =>
       tabBar != oldDelegate.tabBar;
+}
+
+/// Tab bar that listens to chapter + page bookmark repository streams
+/// and refreshes the "Bookmarks (N)" label whenever bookmarks are
+/// added or removed elsewhere in the app.
+class _BookmarkAwareTabBar extends StatefulWidget implements PreferredSizeWidget {
+  const _BookmarkAwareTabBar({
+    required this.controller,
+    required this.chapterCount,
+    required this.sourceId,
+    required this.bookId,
+    required this.accent,
+  });
+
+  final TabController controller;
+  final int chapterCount;
+  final String sourceId;
+  final String bookId;
+  final Color accent;
+
+  @override
+  Size get preferredSize => const Size.fromHeight(kTextTabBarHeight);
+
+  @override
+  State<_BookmarkAwareTabBar> createState() => _BookmarkAwareTabBarState();
+}
+
+class _BookmarkAwareTabBarState extends State<_BookmarkAwareTabBar> {
+  StreamSubscription<BoxEvent>? _chapterSub;
+  StreamSubscription<BoxEvent>? _pageSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _chapterSub = sl<ChapterBookmarksRepository>().watch().listen((_) {
+      if (mounted) setState(() {});
+    });
+    _pageSub = sl<PageBookmarksRepository>().watch().listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _chapterSub?.cancel();
+    _pageSub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final chapterRepo = sl<ChapterBookmarksRepository>();
+    final pageRepo = sl<PageBookmarksRepository>();
+    final n = chapterRepo
+            .getBookmarkedChapterIds(widget.sourceId, widget.bookId)
+            .length +
+        pageRepo.getAllForBook(widget.sourceId, widget.bookId).length;
+    return TabBar(
+      controller: widget.controller,
+      isScrollable: true,
+      tabAlignment: TabAlignment.start,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      labelPadding: const EdgeInsets.symmetric(horizontal: 14),
+      labelColor: widget.accent,
+      unselectedLabelColor: AppColors.textTertiary,
+      indicatorSize: TabBarIndicatorSize.label,
+      indicator: UnderlineTabIndicator(
+        borderSide: BorderSide(color: widget.accent, width: 2),
+        insets: const EdgeInsets.symmetric(horizontal: 2),
+      ),
+      dividerHeight: 0,
+      splashFactory: NoSplash.splashFactory,
+      overlayColor: WidgetStateProperty.all(Colors.transparent),
+      labelStyle: const TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0.2,
+      ),
+      unselectedLabelStyle: const TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0.2,
+      ),
+      tabs: [
+        Tab(text: 'Chapters (${widget.chapterCount})'),
+        const Tab(text: 'More like this'),
+        const Tab(text: 'Details'),
+        Tab(text: n == 0 ? 'Bookmarks' : 'Bookmarks ($n)'),
+      ],
+    );
+  }
 }
 
 class _SimilarTab extends StatelessWidget {
@@ -1673,6 +1822,824 @@ class _StatusRow extends StatelessWidget {
       trailing: selected
           ? Icon(Icons.check_rounded, color: accent, size: 22)
           : null,
+    );
+  }
+}
+
+/// Compact bookmark toggle in the chapter list row trailing slot.
+///
+/// Watches the chapter bookmarks repo so flipping the bookmark anywhere
+/// (here, from the bookmarks tab, or from a future sync push) updates
+/// the icon immediately. Tapping toggles the bookmark and shows an
+/// Undo snackbar.
+class _ChapterBookmarkButton extends StatelessWidget {
+  const _ChapterBookmarkButton({required this.book, required this.chapter});
+
+  final BookDetail book;
+  final Chapter chapter;
+
+  Future<void> _toggle(BuildContext context, bool isBookmarked) async {
+    final repo = sl<ChapterBookmarksRepository>();
+    final messenger = ScaffoldMessenger.of(context);
+    if (isBookmarked) {
+      await repo.remove(book.sourceId, book.id, chapter.id);
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(
+          content: const Text('Bookmark removed'),
+          duration: const Duration(seconds: 3),
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () =>
+                repo.add(book.sourceId, book.id, chapter.id),
+          ),
+        ),
+      );
+    } else {
+      await repo.add(book.sourceId, book.id, chapter.id);
+      // Proactively fetch the chapter's first page so a brand-new
+      // bookmark for a never-opened chapter still renders a thumbnail
+      // in the bookmarks tab. Fire-and-forget; errors are swallowed
+      // via debugPrint so a network blip never breaks the bookmark
+      // flow.
+      _prefetchThumbnail(book, chapter);
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Bookmarked ${chapter.title}'),
+          duration: const Duration(seconds: 3),
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () =>
+                repo.remove(book.sourceId, book.id, chapter.id),
+          ),
+        ),
+      );
+    }
+  }
+
+  void _prefetchThumbnail(BookDetail book, Chapter chapter) {
+    // Skip if we already have a cached thumbnail — most chapters
+    // bookmarked from the chapter list have been seen at least once,
+    // so this short-circuits the network call in the common case.
+    final thumbs = sl<ChapterThumbnailsRepository>();
+    if (thumbs.get(book.sourceId, book.id, chapter.id) != null) return;
+    () async {
+      try {
+        final r = await sl<ProviderRepository>()
+            .pages(book.sourceId, chapter.url);
+        r.fold((_) {}, (pages) {
+          if (pages.isNotEmpty) {
+            thumbs.rememberFirstPage(
+              sourceId: book.sourceId,
+              bookId: book.id,
+              chapterId: chapter.id,
+              firstPageUrl: pages.first.url,
+            );
+          }
+        });
+      } catch (e) {
+        debugPrint('Chapter bookmark thumbnail prefetch failed: $e');
+      }
+    }();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = sl<ChapterBookmarksRepository>();
+    return StreamBuilder<BoxEvent>(
+      stream: repo.watch(),
+      builder: (context, _) {
+        final bookmarked =
+            repo.isBookmarked(book.sourceId, book.id, chapter.id);
+        return IconButton(
+          tooltip: bookmarked ? 'Remove bookmark' : 'Bookmark chapter',
+          icon: Icon(
+            bookmarked ? Icons.bookmark : Icons.bookmark_outline,
+            size: 18,
+            color: bookmarked ? AppColors.primary : AppColors.textTertiary,
+          ),
+          padding: EdgeInsets.zero,
+          visualDensity: VisualDensity.compact,
+          constraints: const BoxConstraints(),
+          onPressed: () => _toggle(context, bookmarked),
+        );
+      },
+    );
+  }
+}
+
+/// "Bookmarks" tab body — shows the chapter bookmarks and page
+/// bookmarks for this series in two sections. Listens to both repos
+/// so the list refreshes whenever the user toggles a bookmark from
+/// the chapter row or the reader long-press menu.
+class _BookmarksTab extends StatefulWidget {
+  const _BookmarksTab({
+    required this.book,
+    required this.onOpenChapter,
+    required this.onOpenChapterAtPage,
+  });
+
+  final BookDetail book;
+  final void Function(int chapterIndex) onOpenChapter;
+  final void Function(int chapterIndex, int pageIndex) onOpenChapterAtPage;
+
+  @override
+  State<_BookmarksTab> createState() => _BookmarksTabState();
+}
+
+class _BookmarksTabState extends State<_BookmarksTab> {
+  StreamSubscription<BoxEvent>? _chapterSub;
+  StreamSubscription<BoxEvent>? _pageSub;
+  // Thumbnails arrive asynchronously after a chapter bookmark prefetch
+  // or after the user reads a chapter — watch the cache so the leading
+  // image swaps in without needing the user to scroll away and back.
+  StreamSubscription<BoxEvent>? _thumbsSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _chapterSub = sl<ChapterBookmarksRepository>().watch().listen((_) {
+      if (mounted) setState(() {});
+    });
+    _pageSub = sl<PageBookmarksRepository>().watch().listen((_) {
+      if (mounted) setState(() {});
+    });
+    _thumbsSub = sl<ChapterThumbnailsRepository>().watch().listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _chapterSub?.cancel();
+    _pageSub?.cancel();
+    _thumbsSub?.cancel();
+    super.dispose();
+  }
+
+  /// Maps a chapter id back to its index in [book.chapters] so we can
+  /// reuse the existing [onOpenChapter] callback. Returns null if the
+  /// chapter no longer exists (e.g. source restructure since the
+  /// bookmark was added).
+  int? _indexForChapter(String chapterId) {
+    for (var i = 0; i < widget.book.chapters.length; i++) {
+      if (widget.book.chapters[i].id == chapterId) return i;
+    }
+    return null;
+  }
+
+  String _titleForChapter(String chapterId) {
+    final i = _indexForChapter(chapterId);
+    if (i == null) return chapterId;
+    return widget.book.chapters[i].title;
+  }
+
+  String _formatDate(DateTime dt) {
+    final local = dt.toLocal();
+    final y = local.year.toString().padLeft(4, '0');
+    final m = local.month.toString().padLeft(2, '0');
+    final d = local.day.toString().padLeft(2, '0');
+    final hh = local.hour.toString().padLeft(2, '0');
+    final mm = local.minute.toString().padLeft(2, '0');
+    return '$y-$m-$d $hh:$mm';
+  }
+
+  Future<void> _removeChapter(ChapterBookmark b) async {
+    final repo = sl<ChapterBookmarksRepository>();
+    final messenger = ScaffoldMessenger.of(context);
+    await repo.remove(b.sourceId, b.bookId, b.chapterId);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: const Text('Bookmark removed'),
+        duration: const Duration(seconds: 3),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () => repo.add(b.sourceId, b.bookId, b.chapterId,
+              note: b.note),
+        ),
+      ),
+    );
+  }
+
+  /// Opens an [AlertDialog] with a multiline text field pre-filled with
+  /// [initialNote] (if any) and returns the new note string, or `null`
+  /// if the user cancelled. An empty string indicates the user wants to
+  /// clear the existing note.
+  Future<String?> _showNoteDialog({String? initialNote}) async {
+    final controller = TextEditingController(text: initialNote ?? '');
+    final isEdit = initialNote != null && initialNote.isNotEmpty;
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          backgroundColor: AppColors.card,
+          title: Text(
+            isEdit ? 'Edit note' : 'Add note',
+            style: const TextStyle(color: AppColors.textPrimary),
+          ),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLines: 4,
+            minLines: 2,
+            maxLength: 200,
+            style: const TextStyle(color: AppColors.textPrimary),
+            decoration: const InputDecoration(
+              hintText: 'Why is this bookmarked?',
+              hintStyle: TextStyle(color: AppColors.textTertiary),
+              counterStyle: TextStyle(color: AppColors.textTertiary),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogCtx).pop(null),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(dialogCtx).pop(controller.text.trim()),
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+    // Defer dispose to a post-frame callback so any pending IME / keyboard
+    // teardown callbacks can drain before the controller goes away. Without
+    // this, dismissing the keyboard right after closing the dialog can race
+    // a late IMM callback against the disposed controller.
+    WidgetsBinding.instance.addPostFrameCallback((_) => controller.dispose());
+    return result;
+  }
+
+  Future<void> _editChapterNote(ChapterBookmark b) async {
+    final next = await _showNoteDialog(initialNote: b.note);
+    if (next == null) return;
+    // [add] is idempotent — same key, refreshed row with the new note.
+    // Passing an empty string clears the note (stored as null since
+    // [ChapterBookmark.toJson] skips empty values via the `if (note !=
+    // null)` guard — but we still want an empty string to mean
+    // "clear", so normalize here).
+    await sl<ChapterBookmarksRepository>().add(
+      b.sourceId,
+      b.bookId,
+      b.chapterId,
+      note: next.isEmpty ? null : next,
+    );
+  }
+
+  Future<void> _editPageNote(PageBookmark b) async {
+    final next = await _showNoteDialog(initialNote: b.note);
+    if (next == null) return;
+    await sl<PageBookmarksRepository>().add(
+      sourceId: b.sourceId,
+      bookId: b.bookId,
+      chapterId: b.chapterId,
+      pageIndex: b.pageIndex,
+      pageUrl: b.pageUrl,
+      note: next.isEmpty ? null : next,
+    );
+  }
+
+  Future<void> _removePage(PageBookmark b) async {
+    final repo = sl<PageBookmarksRepository>();
+    final messenger = ScaffoldMessenger.of(context);
+    await repo.remove(
+      sourceId: b.sourceId,
+      bookId: b.bookId,
+      chapterId: b.chapterId,
+      pageIndex: b.pageIndex,
+    );
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: const Text('Bookmark removed'),
+        duration: const Duration(seconds: 3),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () => repo.add(
+            sourceId: b.sourceId,
+            bookId: b.bookId,
+            chapterId: b.chapterId,
+            pageIndex: b.pageIndex,
+            pageUrl: b.pageUrl,
+            note: b.note,
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final chapterRepo = sl<ChapterBookmarksRepository>();
+    final pageRepo = sl<PageBookmarksRepository>();
+    final chapterBookmarks =
+        chapterRepo.getAllForBook(widget.book.sourceId, widget.book.id);
+    final pageBookmarks =
+        pageRepo.getAllForBook(widget.book.sourceId, widget.book.id);
+
+    if (chapterBookmarks.isEmpty && pageBookmarks.isEmpty) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [
+          SizedBox(height: 48),
+          EmptyView(
+            icon: Icons.bookmark_border,
+            message:
+                'No bookmarks yet. Long-press a chapter or page to save it.',
+          ),
+        ],
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      children: [
+        if (chapterBookmarks.isNotEmpty) ...[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 6),
+            child: _BookmarksSectionLabel('Chapters'),
+          ),
+          for (final b in chapterBookmarks)
+            ListTile(
+              dense: true,
+              contentPadding: const EdgeInsets.symmetric(
+                  vertical: 4, horizontal: 16),
+              leading: _ChapterThumbnail(
+                url: sl<ChapterThumbnailsRepository>().get(
+                    b.sourceId, b.bookId, b.chapterId),
+                fallbackUrl: widget.book.cover,
+              ),
+              title: Text(
+                _titleForChapter(b.chapterId),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: AppColors.textPrimary),
+              ),
+              subtitle: _BookmarkSubtitle(
+                primary: _formatDate(b.addedAt),
+                note: b.note,
+              ),
+              trailing: _BookmarkRowMenu(
+                hasNote: b.note != null && b.note!.isNotEmpty,
+                onEditNote: () => _editChapterNote(b),
+                onRemove: () => _removeChapter(b),
+              ),
+              onTap: () {
+                final i = _indexForChapter(b.chapterId);
+                if (i != null) widget.onOpenChapter(i);
+              },
+              onLongPress: () => _editChapterNote(b),
+            ),
+        ],
+        if (pageBookmarks.isNotEmpty) ...[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 6),
+            child: _BookmarksSectionLabel('Pages'),
+          ),
+          for (final b in pageBookmarks)
+            ListTile(
+              dense: true,
+              contentPadding: const EdgeInsets.symmetric(
+                  vertical: 4, horizontal: 16),
+              leading: _ChapterThumbnail(
+                url: b.pageUrl,
+                fallbackUrl: widget.book.cover,
+              ),
+              title: Text(
+                _titleForChapter(b.chapterId),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: AppColors.textPrimary),
+              ),
+              subtitle: _BookmarkSubtitle(
+                primary:
+                    'Page ${b.pageIndex + 1} · ${_formatDate(b.addedAt)}',
+                note: b.note,
+              ),
+              trailing: _BookmarkRowMenu(
+                hasNote: b.note != null && b.note!.isNotEmpty,
+                onEditNote: () => _editPageNote(b),
+                onRemove: () => _removePage(b),
+              ),
+              onTap: () {
+                final i = _indexForChapter(b.chapterId);
+                if (i != null) {
+                  widget.onOpenChapterAtPage(i, b.pageIndex);
+                }
+              },
+              onLongPress: () => _editPageNote(b),
+            ),
+        ],
+        const SizedBox(height: 24),
+      ],
+    );
+  }
+}
+
+class _BookmarksSectionLabel extends StatelessWidget {
+  const _BookmarksSectionLabel(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text.toUpperCase(),
+      style: TextStyle(
+        color: Theme.of(context).colorScheme.primary,
+        fontSize: 11,
+        fontWeight: FontWeight.w800,
+        letterSpacing: 1.2,
+      ),
+    );
+  }
+}
+
+/// Small 48×64 thumbnail rendered to the left of a chapter row in the
+/// chapter list and the chapter-bookmarks list. Shows the first page of
+/// the chapter when known (cached lazily by [ChapterThumbnailsRepository]
+/// as the user reads) and falls back to a neutral placeholder when no
+/// thumbnail has been seen yet.
+/// Trailing 3-dot menu for a bookmark row. Surfaces Add/Edit note as an
+/// explicit option (so the feature is discoverable beyond the long-press
+/// gesture) and Remove with a red tint.
+class _BookmarkRowMenu extends StatelessWidget {
+  const _BookmarkRowMenu({
+    required this.hasNote,
+    required this.onEditNote,
+    required this.onRemove,
+  });
+
+  final bool hasNote;
+  final VoidCallback onEditNote;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<String>(
+      tooltip: 'More',
+      icon: const Icon(
+        Icons.more_vert_rounded,
+        color: AppColors.textSecondary,
+        size: 18,
+      ),
+      padding: EdgeInsets.zero,
+      onSelected: (v) {
+        switch (v) {
+          case 'note':
+            onEditNote();
+            break;
+          case 'remove':
+            onRemove();
+            break;
+        }
+      },
+      itemBuilder: (_) => [
+        PopupMenuItem<String>(
+          value: 'note',
+          child: Row(
+            children: [
+              Icon(
+                hasNote
+                    ? Icons.edit_note_rounded
+                    : Icons.note_add_outlined,
+                size: 18,
+              ),
+              const SizedBox(width: 12),
+              Text(hasNote ? 'Edit note' : 'Add note'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'remove',
+          child: Row(
+            children: [
+              Icon(Icons.delete_outline_rounded,
+                  size: 18, color: AppColors.primary),
+              SizedBox(width: 12),
+              Text(
+                'Remove',
+                style: TextStyle(color: AppColors.primary),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Lazy-fetched first-page thumbnail. When the chapter has no cached
+/// thumbnail AND the caller passes a [chapter] + [sourceId] + [bookId],
+/// this widget kicks off a one-shot background fetch on first mount —
+/// throttled globally to 3 in-flight requests so scrolling a long
+/// chapter list doesn't spam the source.
+///
+/// While the fetch is in flight (or if it ultimately fails), the row
+/// renders [fallbackUrl] (the series cover). Once the fetch lands, the
+/// cached URL replaces it on the next StreamBuilder tick.
+class _ChapterThumbnail extends StatefulWidget {
+  const _ChapterThumbnail({
+    required this.url,
+    this.fallbackUrl,
+    this.sourceId,
+    this.bookId,
+    this.chapter,
+  });
+
+  /// Primary URL — the cached first-page thumbnail. When this is null
+  /// (chapter never opened, never bookmarked) we drop to [fallbackUrl]
+  /// while a background fetch fills in the cache.
+  final String? url;
+
+  /// Series cover URL — used while the chapter's first page is being
+  /// fetched (or if the fetch ultimately fails). Beats an empty grey
+  /// placeholder.
+  final String? fallbackUrl;
+
+  /// When set together with [bookId] and [chapter], the widget lazily
+  /// fetches the chapter's first page on first mount if no cached
+  /// thumbnail exists yet. Pass null at call sites that should NOT
+  /// trigger a fetch (e.g. the Bookmarks tab, where the bookmark add
+  /// flow already triggered a proactive fetch).
+  final String? sourceId;
+  final String? bookId;
+  final Chapter? chapter;
+
+  static const double _w = 48;
+  static const double _h = 64;
+
+  @override
+  State<_ChapterThumbnail> createState() => _ChapterThumbnailState();
+}
+
+class _ChapterThumbnailState extends State<_ChapterThumbnail> {
+  /// Locally-cached thumbnail URL for this row. Seeded from
+  /// [widget.url] (when the caller passed one) or from the repo on
+  /// first mount, and updated when the repo's watch stream fires for
+  /// OUR chapterId.
+  String? _cachedUrl;
+
+  /// Subscription to the repo's watch stream. Only set when the widget
+  /// owns its own (sourceId, bookId, chapter) — call sites that pass a
+  /// pre-resolved URL skip the subscription entirely (the parent
+  /// rebuilds them on its own).
+  StreamSubscription<BoxEvent>? _watchSub;
+
+  String? get _ownKey {
+    final s = widget.sourceId, b = widget.bookId, c = widget.chapter?.id;
+    if (s == null || b == null || c == null) return null;
+    return '$s::$b::$c';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _cachedUrl = widget.url;
+    _seedFromRepo();
+    _subscribeIfOwned();
+    _maybeScheduleFetch();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ChapterThumbnail old) {
+    super.didUpdateWidget(old);
+    final keyChanged = old.sourceId != widget.sourceId ||
+        old.bookId != widget.bookId ||
+        old.chapter?.id != widget.chapter?.id;
+    if (keyChanged) {
+      // Recycled row → resubscribe + reseed for the new chapter.
+      _watchSub?.cancel();
+      _cachedUrl = widget.url;
+      _seedFromRepo();
+      _subscribeIfOwned();
+      _maybeScheduleFetch();
+    } else if (widget.url != null && widget.url != _cachedUrl) {
+      // Parent overrode the URL → use it.
+      setState(() => _cachedUrl = widget.url);
+    }
+  }
+
+  @override
+  void dispose() {
+    _watchSub?.cancel();
+    super.dispose();
+  }
+
+  void _seedFromRepo() {
+    if (_cachedUrl != null && _cachedUrl!.isNotEmpty) return;
+    final s = widget.sourceId, b = widget.bookId, c = widget.chapter?.id;
+    if (s == null || b == null || c == null) return;
+    final stored = sl<ChapterThumbnailsRepository>().get(s, b, c);
+    if (stored != null && stored.isNotEmpty) _cachedUrl = stored;
+  }
+
+  void _subscribeIfOwned() {
+    final myKey = _ownKey;
+    if (myKey == null) return;
+    _watchSub = sl<ChapterThumbnailsRepository>().watch().listen((event) {
+      // The Hive watch stream fires for every write to the box; filter
+      // to the chapterId this row cares about so unrelated writes don't
+      // trigger a setState.
+      if (event.key != myKey) return;
+      if (!mounted) return;
+      final fresh = sl<ChapterThumbnailsRepository>().get(
+        widget.sourceId!,
+        widget.bookId!,
+        widget.chapter!.id,
+      );
+      if (fresh == _cachedUrl) return;
+      setState(() => _cachedUrl = fresh);
+    });
+  }
+
+  void _maybeScheduleFetch() {
+    if (_cachedUrl != null && _cachedUrl!.isNotEmpty) return;
+    final src = widget.sourceId;
+    final book = widget.bookId;
+    final ch = widget.chapter;
+    if (src == null || book == null || ch == null) return;
+    _ChapterThumbnailFetchQueue.instance.enqueue(
+      sourceId: src,
+      bookId: book,
+      chapter: ch,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String? src = (_cachedUrl != null && _cachedUrl!.isNotEmpty)
+        ? _cachedUrl
+        : (widget.fallbackUrl != null && widget.fallbackUrl!.isNotEmpty
+            ? widget.fallbackUrl
+            : null);
+    return SizedBox(
+      width: _ChapterThumbnail._w,
+      height: _ChapterThumbnail._h,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: src != null
+            ? CachedNetworkImage(
+                imageUrl: src,
+                fit: BoxFit.cover,
+                placeholder: (_, _) => Container(color: AppColors.card),
+                errorWidget: (_, _, _) => _placeholder(Icons.broken_image),
+              )
+            : _placeholder(Icons.image_outlined),
+      ),
+    );
+  }
+
+  Widget _placeholder(IconData icon) {
+    return Container(
+      color: AppColors.card,
+      alignment: Alignment.center,
+      child: Opacity(
+        opacity: 0.5,
+        child: Icon(icon, size: 18, color: AppColors.textTertiary),
+      ),
+    );
+  }
+}
+
+/// Global LIFO queue of chapter-first-page prefetches, throttled to
+/// [_kMaxConcurrent] in-flight HTTP calls so a fast scroll through a
+/// 1000-chapter series doesn't pile up requests.
+///
+/// LIFO order ("freshest visible row wins") deliberately drops older
+/// requests for chapters the user has already scrolled past — they no
+/// longer need a thumbnail urgently. The deduplication set guards
+/// against double-fetching the same chapter when the row briefly
+/// recycles in and out of view.
+class _ChapterThumbnailFetchQueue {
+  _ChapterThumbnailFetchQueue._();
+  static final _ChapterThumbnailFetchQueue instance =
+      _ChapterThumbnailFetchQueue._();
+
+  static const int _kMaxConcurrent = 3;
+
+  final List<_FetchTask> _pending = <_FetchTask>[];
+  final Set<String> _inFlightOrQueued = <String>{};
+  int _inFlight = 0;
+
+  String _key(String sourceId, String bookId, String chapterId) =>
+      '$sourceId::$bookId::$chapterId';
+
+  void enqueue({
+    required String sourceId,
+    required String bookId,
+    required Chapter chapter,
+  }) {
+    final key = _key(sourceId, bookId, chapter.id);
+    if (_inFlightOrQueued.contains(key)) return;
+    // Skip if a thumbnail already landed between the call site's check
+    // and ours (e.g. the user briefly visited the reader for this
+    // chapter while the row was off-screen).
+    final cached = sl<ChapterThumbnailsRepository>()
+        .get(sourceId, bookId, chapter.id);
+    if (cached != null && cached.isNotEmpty) return;
+    _inFlightOrQueued.add(key);
+    _pending.add(_FetchTask(
+      key: key,
+      sourceId: sourceId,
+      bookId: bookId,
+      chapter: chapter,
+    ));
+    _drain();
+  }
+
+  void _drain() {
+    while (_inFlight < _kMaxConcurrent && _pending.isNotEmpty) {
+      // LIFO — newest enqueued wins, matching what the user is
+      // currently looking at after a scroll burst.
+      final task = _pending.removeLast();
+      _inFlight++;
+      // ignore: discarded_futures
+      _runOne(task);
+    }
+  }
+
+  Future<void> _runOne(_FetchTask task) async {
+    try {
+      final r = await sl<ProviderRepository>()
+          .pages(task.sourceId, task.chapter.url);
+      r.fold((_) {}, (pages) {
+        if (pages.isEmpty) return;
+        // ignore: discarded_futures
+        sl<ChapterThumbnailsRepository>().rememberFirstPage(
+          sourceId: task.sourceId,
+          bookId: task.bookId,
+          chapterId: task.chapter.id,
+          firstPageUrl: pages.first.url,
+        );
+      });
+    } catch (_) {
+      // Best-effort. A failed fetch just means the row keeps showing
+      // the cover fallback until the user opens the chapter (which
+      // writes the thumbnail via the reader's hook).
+    } finally {
+      _inFlightOrQueued.remove(task.key);
+      _inFlight--;
+      _drain();
+    }
+  }
+}
+
+class _FetchTask {
+  _FetchTask({
+    required this.key,
+    required this.sourceId,
+    required this.bookId,
+    required this.chapter,
+  });
+  final String key;
+  final String sourceId;
+  final String bookId;
+  final Chapter chapter;
+}
+
+/// Subtitle slot for a bookmark row — shows the existing primary text
+/// (date / page index) on the first line and, when the user has attached
+/// a note, the note in italic on a second line. Truncates the note at
+/// two lines so a long entry never blows the row height.
+class _BookmarkSubtitle extends StatelessWidget {
+  const _BookmarkSubtitle({required this.primary, this.note});
+
+  final String primary;
+  final String? note;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasNote = note != null && note!.isNotEmpty;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          primary,
+          style: const TextStyle(
+            color: AppColors.textTertiary,
+            fontSize: 11,
+          ),
+        ),
+        if (hasNote)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              note!,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppColors.textTertiary,
+                fontSize: 11,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

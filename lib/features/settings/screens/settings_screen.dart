@@ -107,6 +107,11 @@ class _SettingsView extends StatelessWidget {
                 onTap: () => context.pushNamed('history'),
               ),
               SettingsTile(
+                icon: Icons.bookmark_outline,
+                title: 'Bookmarks',
+                onTap: () => context.pushNamed('bookmarks'),
+              ),
+              SettingsTile(
                 icon: Icons.download_done_rounded,
                 title: 'Downloads',
                 onTap: () => context.pushNamed('downloads'),

@@ -5,7 +5,9 @@ import 'package:hive/hive.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../di/injection.dart';
+import '../repository/chapter_bookmarks_repository.dart';
 import '../repository/library_repository.dart';
+import '../repository/page_bookmarks_repository.dart';
 import '../repository/read_chapters_repository.dart';
 import '../sync/library_sync_service.dart';
 
@@ -263,6 +265,16 @@ class AuthService {
       await sl<ReadChaptersRepository>().clear(forSignOut: true);
     } catch (e) {
       debugPrint('[auth] read_chapters clear on sign-out failed: $e');
+    }
+    try {
+      await sl<ChapterBookmarksRepository>().clear(forSignOut: true);
+    } catch (e) {
+      debugPrint('[auth] chapter_bookmarks clear on sign-out failed: $e');
+    }
+    try {
+      await sl<PageBookmarksRepository>().clear(forSignOut: true);
+    } catch (e) {
+      debugPrint('[auth] page_bookmarks clear on sign-out failed: $e');
     }
     await auth.signOut();
     await _settingsBox?.delete(_emailKey);

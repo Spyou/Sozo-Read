@@ -14,7 +14,14 @@ import 'core/theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  PaintingBinding.instance.imageCache.maximumSizeBytes = 200 * 1024 * 1024;
+  // Image cache caps. The Flutter default is 100 MB / 1000 images which
+  // a 1000-chapter manga thumbnail list can easily blow past, pushing
+  // low-RAM devices to OOM and triggering aggressive GC pauses during
+  // scroll. 64 MB / 200 images comfortably covers the visible window
+  // plus a generous scroll-ahead buffer.
+  PaintingBinding.instance.imageCache
+    ..maximumSize = 200
+    ..maximumSizeBytes = 64 * 1024 * 1024;
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,

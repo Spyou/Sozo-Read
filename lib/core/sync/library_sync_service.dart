@@ -4,7 +4,9 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/book_item.dart';
+import '../repository/chapter_bookmarks_repository.dart';
 import '../repository/library_repository.dart';
+import '../repository/page_bookmarks_repository.dart';
 import '../repository/read_chapters_repository.dart';
 import '../state/auth_service.dart';
 
@@ -40,17 +42,25 @@ class LibrarySyncService {
   LibrarySyncService({
     required LibraryRepository library,
     required ReadChaptersRepository readChapters,
+    required ChapterBookmarksRepository chapterBookmarks,
+    required PageBookmarksRepository pageBookmarks,
     required AuthService auth,
   })  : _library = library,
         _readChapters = readChapters,
+        _chapterBookmarks = chapterBookmarks,
+        _pageBookmarks = pageBookmarks,
         _auth = auth;
 
   static const _table = 'library_entries';
   static const _readChaptersTable = 'read_chapters';
+  static const _chapterBookmarksTable = 'chapter_bookmarks';
+  static const _pageBookmarksTable = 'page_bookmarks';
   static const Duration _debounce = Duration(seconds: 2);
 
   final LibraryRepository _library;
   final ReadChaptersRepository _readChapters;
+  final ChapterBookmarksRepository _chapterBookmarks;
+  final PageBookmarksRepository _pageBookmarks;
   final AuthService _auth;
 
   SupabaseClient? get _client {
@@ -99,6 +109,8 @@ class LibrarySyncService {
     _started = true;
     _library.onLocalWrite = _kickDebounce;
     _readChapters.onLocalWrite = _kickDebounce;
+    _chapterBookmarks.onLocalWrite = _kickDebounce;
+    _pageBookmarks.onLocalWrite = _kickDebounce;
     _authSub = _auth.authStream.listen((event) {
       if (event == AuthChangeEvent.signedIn ||
           event == AuthChangeEvent.tokenRefreshed) {
@@ -120,6 +132,8 @@ class LibrarySyncService {
     _started = false;
     _library.onLocalWrite = null;
     _readChapters.onLocalWrite = null;
+    _chapterBookmarks.onLocalWrite = null;
+    _pageBookmarks.onLocalWrite = null;
     _debounceTimer?.cancel();
     _debounceTimer = null;
     await _authSub?.cancel();
@@ -148,13 +162,21 @@ class LibrarySyncService {
     final hasWork = _library.dirtyKeys().isNotEmpty ||
         _library.tombstones().isNotEmpty ||
         _readChapters.dirtyKeys().isNotEmpty ||
-        _readChapters.tombstones().isNotEmpty;
+        _readChapters.tombstones().isNotEmpty ||
+        _chapterBookmarks.dirtyKeys().isNotEmpty ||
+        _chapterBookmarks.tombstones().isNotEmpty ||
+        _pageBookmarks.dirtyKeys().isNotEmpty ||
+        _pageBookmarks.tombstones().isNotEmpty;
     if (hasWork) _setStatus(LibrarySyncStatus.syncing);
     try {
       await _pushDirty(client, userId);
       await _pushTombstones(client, userId);
       await _pushReadDirty(client, userId);
       await _pushReadTombstones(client, userId);
+      await _pushChapterBookmarksDirty(client, userId);
+      await _pushChapterBookmarksTombstones(client, userId);
+      await _pushPageBookmarksDirty(client, userId);
+      await _pushPageBookmarksTombstones(client, userId);
       if (hasWork) _setStatus(LibrarySyncStatus.idle);
     } catch (e, st) {
       debugPrint('[sync] flush failed: $e\n$st');
@@ -284,6 +306,169 @@ class LibrarySyncService {
     await _readChapters.ackTombstones(acks);
   }
 
+  // -- chapter_bookmarks push ---------------------------------------------
+
+  Future<void> _pushChapterBookmarksDirty(
+    SupabaseClient client,
+    String userId,
+  ) async {
+    final dirty = _chapterBookmarks.dirtyKeys();
+    if (dirty.isEmpty) return;
+    final tombstones = _chapterBookmarks.tombstones();
+    final rows = <Map<String, dynamic>>[];
+    final pushed = <String>[];
+    for (final key in dirty.keys) {
+      // Tombstone wins — let _pushChapterBookmarksTombstones handle delete.
+      if (tombstones.containsKey(key)) continue;
+      final entry = _chapterBookmarkByKey(key);
+      if (entry == null) {
+        pushed.add(key); // gone locally — drop the dirty flag
+        continue;
+      }
+      rows.add({
+        'user_id': userId,
+        'source_id': entry.sourceId,
+        'book_id': entry.bookId,
+        'chapter_id': entry.chapterId,
+        'added_at': entry.addedAt.toIso8601String(),
+        'note': entry.note,
+      });
+      pushed.add(key);
+    }
+    if (rows.isEmpty) {
+      if (pushed.isNotEmpty) await _chapterBookmarks.ackDirty(pushed);
+      return;
+    }
+    debugPrint('[sync] pushing ${rows.length} chapter_bookmarks rows');
+    try {
+      await client.from(_chapterBookmarksTable).upsert(
+            rows,
+            onConflict: 'user_id,source_id,book_id,chapter_id',
+          );
+      await _chapterBookmarks.ackDirty(pushed);
+    } catch (e) {
+      debugPrint('[sync] chapter_bookmarks upsert failed: $e');
+    }
+  }
+
+  Future<void> _pushChapterBookmarksTombstones(
+    SupabaseClient client,
+    String userId,
+  ) async {
+    final tombstones = _chapterBookmarks.tombstones();
+    if (tombstones.isEmpty) return;
+    final acks = <String>[];
+    for (final key in tombstones.keys) {
+      final parts = key.split('::');
+      if (parts.length < 3) {
+        acks.add(key); // malformed — drop it
+        continue;
+      }
+      final sourceId = parts[0];
+      final bookId = parts[1];
+      final chapterId = parts.sublist(2).join('::');
+      try {
+        await client
+            .from(_chapterBookmarksTable)
+            .delete()
+            .eq('user_id', userId)
+            .eq('source_id', sourceId)
+            .eq('book_id', bookId)
+            .eq('chapter_id', chapterId);
+        acks.add(key);
+      } catch (e) {
+        debugPrint('[sync] chapter_bookmarks delete failed for $key: $e');
+      }
+    }
+    await _chapterBookmarks.ackTombstones(acks);
+  }
+
+  // -- page_bookmarks push -------------------------------------------------
+
+  Future<void> _pushPageBookmarksDirty(
+    SupabaseClient client,
+    String userId,
+  ) async {
+    final dirty = _pageBookmarks.dirtyKeys();
+    if (dirty.isEmpty) return;
+    final tombstones = _pageBookmarks.tombstones();
+    final rows = <Map<String, dynamic>>[];
+    final pushed = <String>[];
+    for (final key in dirty.keys) {
+      // Tombstone wins — let _pushPageBookmarksTombstones handle delete.
+      if (tombstones.containsKey(key)) continue;
+      final entry = _pageBookmarkByKey(key);
+      if (entry == null) {
+        pushed.add(key); // gone locally — drop the dirty flag
+        continue;
+      }
+      rows.add({
+        'user_id': userId,
+        'source_id': entry.sourceId,
+        'book_id': entry.bookId,
+        'chapter_id': entry.chapterId,
+        'page_index': entry.pageIndex,
+        'added_at': entry.addedAt.toIso8601String(),
+        'page_url': entry.pageUrl,
+        'note': entry.note,
+      });
+      pushed.add(key);
+    }
+    if (rows.isEmpty) {
+      if (pushed.isNotEmpty) await _pageBookmarks.ackDirty(pushed);
+      return;
+    }
+    debugPrint('[sync] pushing ${rows.length} page_bookmarks rows');
+    try {
+      await client.from(_pageBookmarksTable).upsert(
+            rows,
+            onConflict: 'user_id,source_id,book_id,chapter_id,page_index',
+          );
+      await _pageBookmarks.ackDirty(pushed);
+    } catch (e) {
+      debugPrint('[sync] page_bookmarks upsert failed: $e');
+    }
+  }
+
+  Future<void> _pushPageBookmarksTombstones(
+    SupabaseClient client,
+    String userId,
+  ) async {
+    final tombstones = _pageBookmarks.tombstones();
+    if (tombstones.isEmpty) return;
+    final acks = <String>[];
+    for (final key in tombstones.keys) {
+      final parts = key.split('::');
+      // page bookmark key: sourceId::bookId::chapterId::pageIndex
+      if (parts.length < 4) {
+        acks.add(key); // malformed — drop it
+        continue;
+      }
+      final sourceId = parts[0];
+      final bookId = parts[1];
+      final pageIndex = int.tryParse(parts.last);
+      if (pageIndex == null) {
+        acks.add(key);
+        continue;
+      }
+      final chapterId = parts.sublist(2, parts.length - 1).join('::');
+      try {
+        await client
+            .from(_pageBookmarksTable)
+            .delete()
+            .eq('user_id', userId)
+            .eq('source_id', sourceId)
+            .eq('book_id', bookId)
+            .eq('chapter_id', chapterId)
+            .eq('page_index', pageIndex);
+        acks.add(key);
+      } catch (e) {
+        debugPrint('[sync] page_bookmarks delete failed for $key: $e');
+      }
+    }
+    await _pageBookmarks.ackTombstones(acks);
+  }
+
   /// Fetch every row for the current user and merge into Hive by
   /// `updated_at`. The local row wins iff its `updatedAt` is strictly
   /// newer than the cloud's (otherwise cloud wins). Tombstones with
@@ -345,6 +530,20 @@ class LibrarySyncService {
       hadError = true;
       _setStatus(LibrarySyncStatus.error, error: e.toString());
     }
+    try {
+      await _pullChapterBookmarks(client, userId);
+    } catch (e) {
+      debugPrint('[sync] pullChapterBookmarks failed: $e');
+      hadError = true;
+      _setStatus(LibrarySyncStatus.error, error: e.toString());
+    }
+    try {
+      await _pullPageBookmarks(client, userId);
+    } catch (e) {
+      debugPrint('[sync] pullPageBookmarks failed: $e');
+      hadError = true;
+      _setStatus(LibrarySyncStatus.error, error: e.toString());
+    }
     if (!hadError) _setStatus(LibrarySyncStatus.idle);
   }
 
@@ -383,6 +582,79 @@ class LibrarySyncService {
       }
     } catch (e, st) {
       debugPrint('[sync] read_chapters pull failed: $e\n$st');
+    }
+  }
+
+  /// Pull every `chapter_bookmarks` row for the user. Conflict resolution
+  /// mirrors `read_chapters`: tombstone wins unless the cloud row was
+  /// written after the tombstone (resurrected from another device).
+  Future<void> _pullChapterBookmarks(
+    SupabaseClient client,
+    String userId,
+  ) async {
+    try {
+      final rows = await client
+          .from(_chapterBookmarksTable)
+          .select()
+          .eq('user_id', userId)
+          .order('added_at', ascending: false)
+          .limit(2000);
+      debugPrint('[sync] pulled ${rows.length} chapter_bookmarks rows');
+      final tombstones = _chapterBookmarks.tombstones();
+      for (final raw in rows) {
+        final row = Map<String, dynamic>.from(raw as Map);
+        final cloud = _chapterBookmarkFromRow(row);
+        if (cloud == null) continue;
+        final key = cloud.key;
+        final tomb = tombstones[key];
+        if (tomb != null) {
+          final tombAt = DateTime.tryParse(tomb);
+          if (tombAt != null && cloud.addedAt.isAfter(tombAt)) {
+            await _chapterBookmarks.ackTombstones([key]);
+          } else {
+            continue;
+          }
+        }
+        await _chapterBookmarks.putFromSync(cloud);
+      }
+    } catch (e, st) {
+      debugPrint('[sync] chapter_bookmarks pull failed: $e\n$st');
+    }
+  }
+
+  /// Pull every `page_bookmarks` row for the user. Same conflict policy
+  /// as the chapter-level bookmark table.
+  Future<void> _pullPageBookmarks(
+    SupabaseClient client,
+    String userId,
+  ) async {
+    try {
+      final rows = await client
+          .from(_pageBookmarksTable)
+          .select()
+          .eq('user_id', userId)
+          .order('added_at', ascending: false)
+          .limit(2000);
+      debugPrint('[sync] pulled ${rows.length} page_bookmarks rows');
+      final tombstones = _pageBookmarks.tombstones();
+      for (final raw in rows) {
+        final row = Map<String, dynamic>.from(raw as Map);
+        final cloud = _pageBookmarkFromRow(row);
+        if (cloud == null) continue;
+        final key = cloud.key;
+        final tomb = tombstones[key];
+        if (tomb != null) {
+          final tombAt = DateTime.tryParse(tomb);
+          if (tombAt != null && cloud.addedAt.isAfter(tombAt)) {
+            await _pageBookmarks.ackTombstones([key]);
+          } else {
+            continue;
+          }
+        }
+        await _pageBookmarks.putFromSync(cloud);
+      }
+    } catch (e, st) {
+      debugPrint('[sync] page_bookmarks pull failed: $e\n$st');
     }
   }
 
@@ -452,5 +724,71 @@ class LibrarySyncService {
       debugPrint('[sync] failed to parse read_chapters row: $e ($row)');
       return null;
     }
+  }
+
+  ChapterBookmark? _chapterBookmarkFromRow(Map<String, dynamic> row) {
+    try {
+      return ChapterBookmark(
+        sourceId: row['source_id'] as String,
+        bookId: row['book_id'] as String,
+        chapterId: row['chapter_id'] as String,
+        addedAt: DateTime.parse(row['added_at'] as String),
+        note: row['note'] as String?,
+      );
+    } catch (e) {
+      debugPrint('[sync] failed to parse chapter_bookmarks row: $e ($row)');
+      return null;
+    }
+  }
+
+  PageBookmark? _pageBookmarkFromRow(Map<String, dynamic> row) {
+    try {
+      return PageBookmark(
+        sourceId: row['source_id'] as String,
+        bookId: row['book_id'] as String,
+        chapterId: row['chapter_id'] as String,
+        pageIndex: (row['page_index'] as num).toInt(),
+        addedAt: DateTime.parse(row['added_at'] as String),
+        pageUrl: row['page_url'] as String?,
+        note: row['note'] as String?,
+      );
+    } catch (e) {
+      debugPrint('[sync] failed to parse page_bookmarks row: $e ($row)');
+      return null;
+    }
+  }
+
+  /// Reconstruct a [ChapterBookmark] from a dirty-queue key by looking up
+  /// the current Hive row. Returns null if the entry has been deleted
+  /// underneath us.
+  ChapterBookmark? _chapterBookmarkByKey(String key) {
+    final parts = key.split('::');
+    if (parts.length < 3) return null;
+    final sourceId = parts[0];
+    final bookId = parts[1];
+    final chapterId = parts.sublist(2).join('::');
+    // The repo doesn't expose a public single-key getter, but
+    // getAllForBook + filter is O(n-in-book) which is fine here.
+    for (final entry in _chapterBookmarks.getAllForBook(sourceId, bookId)) {
+      if (entry.chapterId == chapterId) return entry;
+    }
+    return null;
+  }
+
+  /// Reconstruct a [PageBookmark] from a dirty-queue key.
+  PageBookmark? _pageBookmarkByKey(String key) {
+    final parts = key.split('::');
+    if (parts.length < 4) return null;
+    final sourceId = parts[0];
+    final bookId = parts[1];
+    final pageIndex = int.tryParse(parts.last);
+    if (pageIndex == null) return null;
+    final chapterId = parts.sublist(2, parts.length - 1).join('::');
+    for (final entry in _pageBookmarks.getAllForBook(sourceId, bookId)) {
+      if (entry.chapterId == chapterId && entry.pageIndex == pageIndex) {
+        return entry;
+      }
+    }
+    return null;
   }
 }

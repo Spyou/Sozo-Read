@@ -15,6 +15,7 @@ class MangaReaderStarted extends MangaReaderEvent {
     required this.chapterIndex,
     this.initialMode,
     this.initialDirection,
+    this.initialPageIndex,
   });
   final BookDetail book;
   final int chapterIndex;
@@ -28,8 +29,15 @@ class MangaReaderStarted extends MangaReaderEvent {
   /// [initialMode] is [ReaderMode.horizontal].
   final ReadingDirection? initialDirection;
 
+  /// If provided, the reader jumps to this page after the first pages-fetch
+  /// completes — used when navigating from a page bookmark so the user
+  /// lands on the exact page they saved, not the chapter's beginning.
+  /// Overrides the library's "lastChapterProgress" resume.
+  final int? initialPageIndex;
+
   @override
-  List<Object?> get props => [book, chapterIndex, initialMode, initialDirection];
+  List<Object?> get props =>
+      [book, chapterIndex, initialMode, initialDirection, initialPageIndex];
 }
 
 class MangaReaderChapterChanged extends MangaReaderEvent {

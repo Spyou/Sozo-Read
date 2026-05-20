@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../features/auth/screens/auth_screen.dart';
+import '../../features/bookmarks/screens/bookmarks_screen.dart';
 import '../../features/detail/screens/detail_screen.dart';
 import '../../features/downloads/screens/downloads_screen.dart';
 import '../../features/genre_browse/screens/genre_browse_screen.dart';
@@ -175,6 +176,11 @@ GoRouter buildRouter() {
         builder: (_, _) => const DownloadsScreen(),
       ),
       GoRoute(
+        path: '/bookmarks',
+        name: 'bookmarks',
+        builder: (_, _) => const BookmarksScreen(),
+      ),
+      GoRoute(
         path: '/auth',
         name: 'auth',
         builder: (_, state) {
@@ -260,6 +266,7 @@ GoRouter buildRouter() {
           return MangaReaderScreen(
             book: extra['book'] as BookDetail,
             chapterIndex: extra['chapterIndex'] as int,
+            initialPageIndex: extra['initialPageIndex'] as int?,
           );
         },
       ),

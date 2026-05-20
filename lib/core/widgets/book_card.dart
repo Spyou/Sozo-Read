@@ -67,11 +67,20 @@ class BookCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 8),
-            Text(
-              book.title,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(height: 1.2),
+            // `Flexible` lets the title (2 lines max) shrink to whatever
+            // space the grid leaves after the cover. Long titles
+            // ("Shin Sekai Builders! ~Class 24…") otherwise overflow the
+            // card by ~10px when the parent's height constraint is tight.
+            Flexible(
+              child: Text(
+                book.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(height: 1.15),
+              ),
             ),
             if (subtitle != null) ...[
               const SizedBox(height: 2),

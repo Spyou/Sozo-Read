@@ -6,8 +6,11 @@ import '../provider/provider_downloader.dart';
 import '../provider/provider_manager.dart';
 import '../provider/provider_registry.dart';
 import '../repository/book_detail_cache.dart';
+import '../repository/chapter_bookmarks_repository.dart';
+import '../repository/chapter_thumbnails_repository.dart';
 import '../repository/downloads_repository.dart';
 import '../repository/library_repository.dart';
+import '../repository/page_bookmarks_repository.dart';
 import '../repository/provider_repository.dart';
 import '../repository/read_chapters_repository.dart';
 import '../repository/tracker_repository.dart';
@@ -61,6 +64,15 @@ Future<void> configureDependencies() async {
     () => ReadChaptersRepository(),
   );
   sl.registerLazySingleton<DownloadsRepository>(() => DownloadsRepository());
+  sl.registerLazySingleton<ChapterBookmarksRepository>(
+    () => ChapterBookmarksRepository(),
+  );
+  sl.registerLazySingleton<PageBookmarksRepository>(
+    () => PageBookmarksRepository(),
+  );
+  sl.registerLazySingleton<ChapterThumbnailsRepository>(
+    () => ChapterThumbnailsRepository(),
+  );
   sl.registerLazySingleton<BookDetailCache>(() => BookDetailCache());
   sl.registerLazySingleton<ActiveSourceCubit>(
     () => ActiveSourceCubit(repository: sl()),
@@ -77,6 +89,8 @@ Future<void> configureDependencies() async {
     () => LibrarySyncService(
       library: sl(),
       readChapters: sl(),
+      chapterBookmarks: sl(),
+      pageBookmarks: sl(),
       auth: sl(),
     ),
   );

@@ -8,6 +8,7 @@ import '../../../../core/models/page_content.dart';
 import '../../../../core/repository/downloads_repository.dart';
 import '../../../../core/repository/library_repository.dart';
 import '../../../../core/repository/provider_repository.dart';
+import '../../../../core/repository/chapter_thumbnails_repository.dart';
 import '../../../../core/repository/read_chapters_repository.dart';
 import '../../../../core/repository/tracker_repository.dart';
 import 'manga_reader_event.dart';
@@ -79,11 +80,17 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
       localTitle: event.book.title,
     );
 
-    final resume = (entry.lastChapterIndex == event.chapterIndex &&
-            (entry.lastChapterProgress ?? 0) > 0 &&
-            (entry.lastChapterProgress ?? 0) < 1)
-        ? entry.lastChapterProgress
-        : null;
+    // If the caller asked to deep-jump to a specific page (page-bookmark
+    // tap), that wins over the library's "you were 67% through" resume.
+    // The resume fraction is computed inside _fetchPages once we know
+    // how many pages the chapter actually has.
+    final resume = event.initialPageIndex != null
+        ? null
+        : (entry.lastChapterIndex == event.chapterIndex &&
+                (entry.lastChapterProgress ?? 0) > 0 &&
+                (entry.lastChapterProgress ?? 0) < 1)
+            ? entry.lastChapterProgress
+            : null;
     // Promote to Reading whenever the user opens a chapter they haven't
     // already finished. This covers two cases:
     //   * planning / on-hold / dropped → reading (always)
@@ -111,7 +118,11 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
         );
       }
     }
-    await _fetchPages(emit, pendingResume: resume);
+    await _fetchPages(
+      emit,
+      pendingResume: resume,
+      initialPageIndex: event.initialPageIndex,
+    );
     _prefetchNext();
   }
 
@@ -219,6 +230,7 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
   Future<void> _fetchPages(
     Emitter<MangaReaderState> emit, {
     double? pendingResume,
+    int? initialPageIndex,
   }) async {
     final book = state.book;
     if (book == null || book.chapters.isEmpty) return;
@@ -230,6 +242,18 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
       clearError: true,
       pages: const [],
     ));
+
+    // Resolves the resume fraction once we know how many pages there
+    // are. If the caller passed [initialPageIndex] (e.g. via a page
+    // bookmark tap), convert it to a fraction here and override the
+    // library's lastChapterProgress.
+    double? resolveResume(int pageCount) {
+      if (initialPageIndex != null && pageCount > 0) {
+        final clamped = initialPageIndex.clamp(0, pageCount - 1);
+        return clamped / pageCount;
+      }
+      return pendingResume;
+    }
 
     // Offline fast-path: if this chapter is fully downloaded, build pages
     // from the local manifest and skip the network entirely.
@@ -249,7 +273,7 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
         status: ReaderStatus.success,
         pages: localPages,
         clearError: true,
-        pendingResumeProgress: pendingResume,
+        pendingResumeProgress: resolveResume(localPages.length),
       ));
       return;
     }
@@ -269,8 +293,20 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
           pages: pages,
           error: pages.isEmpty ? 'No pages (chapter may be external/licensed)' : null,
           clearError: pages.isNotEmpty,
-          pendingResumeProgress: pages.isNotEmpty ? pendingResume : null,
+          pendingResumeProgress:
+              pages.isNotEmpty ? resolveResume(pages.length) : null,
         ));
+        // Cache the first page URL so the chapter list + Bookmarks tab
+        // can render a thumbnail for chapters the user has opened.
+        if (pages.isNotEmpty) {
+          // ignore: discarded_futures
+          sl<ChapterThumbnailsRepository>().rememberFirstPage(
+            sourceId: book.sourceId,
+            bookId: book.id,
+            chapterId: ch.id,
+            firstPageUrl: pages.first.url,
+          );
+        }
       },
     );
   }

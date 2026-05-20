@@ -6,10 +6,12 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:hive/hive.dart';
 import 'package:saver_gallery/saver_gallery.dart';
 
 import '../../../../core/di/injection.dart';
 import '../../../../core/models/page_content.dart';
+import '../../../../core/repository/page_bookmarks_repository.dart';
 import '../../../../core/state/manga_prefs_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 
@@ -89,9 +91,21 @@ MangaPrefs _readPrefs(BuildContext context) {
 /// the page to the device gallery, view it full-resolution in a pinch-zoom
 /// dialog, or copy its URL to the clipboard.
 class PageImage extends StatefulWidget {
-  const PageImage({super.key, required this.page, this.fit = BoxFit.fitWidth});
+  const PageImage({
+    super.key,
+    required this.page,
+    required this.sourceId,
+    required this.bookId,
+    required this.chapterId,
+    required this.pageIndex,
+    this.fit = BoxFit.fitWidth,
+  });
 
   final PageContent page;
+  final String sourceId;
+  final String bookId;
+  final String chapterId;
+  final int pageIndex;
   final BoxFit fit;
 
   @override
@@ -165,56 +179,117 @@ class _PageImageState extends State<PageImage> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (sheetCtx) {
+        final pageRepo = sl<PageBookmarksRepository>();
+        // Stream-watch inside the sheet so the bookmark row flips
+        // instantly when toggled — no need to dismiss + reopen.
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 8),
-              Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: AppColors.divider,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 8),
-              ListTile(
-                leading: const Icon(Icons.save_alt,
-                    color: AppColors.textPrimary),
-                title: const Text('Save image',
-                    style: TextStyle(color: AppColors.textPrimary)),
-                onTap: () {
-                  Navigator.pop(sheetCtx);
-                  _saveImage();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.zoom_out_map,
-                    color: AppColors.textPrimary),
-                title: const Text('View full resolution',
-                    style: TextStyle(color: AppColors.textPrimary)),
-                onTap: () {
-                  Navigator.pop(sheetCtx);
-                  _viewFullResolution();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.link,
-                    color: AppColors.textPrimary),
-                title: const Text('Copy image URL',
-                    style: TextStyle(color: AppColors.textPrimary)),
-                onTap: () {
-                  Navigator.pop(sheetCtx);
-                  _copyUrl();
-                },
-              ),
-              const SizedBox(height: 8),
-            ],
+          child: StreamBuilder<BoxEvent>(
+            stream: pageRepo.watch(),
+            builder: (sheetCtx2, _) {
+              final bookmarked = pageRepo.isBookmarked(
+                sourceId: widget.sourceId,
+                bookId: widget.bookId,
+                chapterId: widget.chapterId,
+                pageIndex: widget.pageIndex,
+              );
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 8),
+                  Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: AppColors.divider,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ListTile(
+                    leading: Icon(
+                      bookmarked
+                          ? Icons.bookmark_remove_outlined
+                          : Icons.bookmark_add_outlined,
+                      color: AppColors.textPrimary,
+                    ),
+                    title: Text(
+                      bookmarked
+                          ? 'Bookmark added'
+                          : 'Bookmark this page',
+                      style: const TextStyle(color: AppColors.textPrimary),
+                    ),
+                    onTap: () => _togglePageBookmark(sheetCtx, bookmarked),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.save_alt,
+                        color: AppColors.textPrimary),
+                    title: const Text('Save image',
+                        style: TextStyle(color: AppColors.textPrimary)),
+                    onTap: () {
+                      Navigator.pop(sheetCtx);
+                      _saveImage();
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.zoom_out_map,
+                        color: AppColors.textPrimary),
+                    title: const Text('View full resolution',
+                        style: TextStyle(color: AppColors.textPrimary)),
+                    onTap: () {
+                      Navigator.pop(sheetCtx);
+                      _viewFullResolution();
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.link,
+                        color: AppColors.textPrimary),
+                    title: const Text('Copy image URL',
+                        style: TextStyle(color: AppColors.textPrimary)),
+                    onTap: () {
+                      Navigator.pop(sheetCtx);
+                      _copyUrl();
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              );
+            },
           ),
         );
       },
     );
+  }
+
+  Future<void> _togglePageBookmark(
+    BuildContext sheetCtx,
+    bool currentlyBookmarked,
+  ) async {
+    final repo = sl<PageBookmarksRepository>();
+    final messenger = ScaffoldMessenger.of(context);
+    if (currentlyBookmarked) {
+      await repo.remove(
+        sourceId: widget.sourceId,
+        bookId: widget.bookId,
+        chapterId: widget.chapterId,
+        pageIndex: widget.pageIndex,
+      );
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Bookmark removed')),
+      );
+    } else {
+      await repo.add(
+        sourceId: widget.sourceId,
+        bookId: widget.bookId,
+        chapterId: widget.chapterId,
+        pageIndex: widget.pageIndex,
+        pageUrl: widget.page.url,
+      );
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(content: Text('Bookmarked page ${widget.pageIndex + 1}')),
+      );
+    }
   }
 
   Future<void> _saveImage() async {

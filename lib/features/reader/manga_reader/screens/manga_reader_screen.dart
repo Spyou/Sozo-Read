@@ -38,10 +38,20 @@ import '../bloc/manga_reader_state.dart';
 import '../widgets/page_image.dart';
 
 class MangaReaderScreen extends StatelessWidget {
-  const MangaReaderScreen({super.key, required this.book, required this.chapterIndex});
+  const MangaReaderScreen({
+    super.key,
+    required this.book,
+    required this.chapterIndex,
+    this.initialPageIndex,
+  });
 
   final BookDetail book;
   final int chapterIndex;
+
+  /// Optional — when navigating from a page bookmark, the reader jumps
+  /// to this page after the first pages-fetch completes. Overrides the
+  /// library's last-progress resume.
+  final int? initialPageIndex;
 
   @override
   Widget build(BuildContext context) {
@@ -69,6 +79,7 @@ class MangaReaderScreen extends StatelessWidget {
               chapterIndex: chapterIndex,
               initialMode: initialMode,
               initialDirection: initialDirection,
+              initialPageIndex: initialPageIndex,
             )),
         ),
       ],
@@ -1471,7 +1482,18 @@ class _VerticalReader extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    PageImage(page: state.pages[i]),
+                    PageImage(
+                      page: state.pages[i],
+                      sourceId: state.book?.sourceId ?? '',
+                      bookId: state.book?.id ?? '',
+                      chapterId: (state.book != null &&
+                              state.chapterIndex >= 0 &&
+                              state.chapterIndex <
+                                  state.book!.chapters.length)
+                          ? state.book!.chapters[state.chapterIndex].id
+                          : '',
+                      pageIndex: i,
+                    ),
                     Container(
                       padding: const EdgeInsets.symmetric(vertical: 4),
                       color: gap,
@@ -1549,6 +1571,16 @@ class _HorizontalReader extends StatelessWidget {
                       child: Center(
                         child: PageImage(
                           page: state.pages[i],
+                          sourceId: state.book?.sourceId ?? '',
+                          bookId: state.book?.id ?? '',
+                          chapterId: (state.book != null &&
+                                  state.chapterIndex >= 0 &&
+                                  state.chapterIndex <
+                                      state.book!.chapters.length)
+                              ? state.book!
+                                  .chapters[state.chapterIndex].id
+                              : '',
+                          pageIndex: i,
                           fit: BoxFit.contain,
                         ),
                       ),
@@ -1557,6 +1589,16 @@ class _HorizontalReader extends StatelessWidget {
                       child: Center(
                         child: PageImage(
                           page: state.pages[i + 1],
+                          sourceId: state.book?.sourceId ?? '',
+                          bookId: state.book?.id ?? '',
+                          chapterId: (state.book != null &&
+                                  state.chapterIndex >= 0 &&
+                                  state.chapterIndex <
+                                      state.book!.chapters.length)
+                              ? state.book!
+                                  .chapters[state.chapterIndex].id
+                              : '',
+                          pageIndex: i + 1,
                           fit: BoxFit.contain,
                         ),
                       ),
@@ -1571,7 +1613,19 @@ class _HorizontalReader extends StatelessWidget {
               maxScale: 4,
               panEnabled: true,
               child: Center(
-                child: PageImage(page: state.pages[i], fit: BoxFit.contain),
+                child: PageImage(
+                  page: state.pages[i],
+                  sourceId: state.book?.sourceId ?? '',
+                  bookId: state.book?.id ?? '',
+                  chapterId: (state.book != null &&
+                          state.chapterIndex >= 0 &&
+                          state.chapterIndex <
+                              state.book!.chapters.length)
+                      ? state.book!.chapters[state.chapterIndex].id
+                      : '',
+                  pageIndex: i,
+                  fit: BoxFit.contain,
+                ),
               ),
             );
           },
