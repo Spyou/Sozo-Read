@@ -1,4 +1,5 @@
 import 'package:cached_network_image/cached_network_image.dart';
+import '../../../../core/services/image_cache_manager.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -360,6 +361,7 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
             final take = pages.take(10).toList();
             for (final p in take) {
               final provider = CachedNetworkImageProvider(
+                cacheManager: appImageCacheManager,
                 p.url,
                 headers: p.headers,
               );

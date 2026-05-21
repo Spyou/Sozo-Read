@@ -12,6 +12,7 @@ class SectionRow extends StatelessWidget {
     this.loading = false,
     this.error,
     this.onTapBook,
+    this.onLongPressBook,
   });
 
   final String title;
@@ -19,6 +20,7 @@ class SectionRow extends StatelessWidget {
   final bool loading;
   final String? error;
   final void Function(BookItem book)? onTapBook;
+  final void Function(BookItem book)? onLongPressBook;
 
   @override
   Widget build(BuildContext context) {
@@ -90,7 +92,13 @@ class SectionRow extends StatelessWidget {
     return ListView.separated(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      itemBuilder: (_, i) => BookCard(book: books[i], onTap: () => onTapBook?.call(books[i])),
+      itemBuilder: (_, i) => BookCard(
+        book: books[i],
+        onTap: () => onTapBook?.call(books[i]),
+        onLongPress: onLongPressBook == null
+            ? null
+            : () => onLongPressBook!(books[i]),
+      ),
       separatorBuilder: (_, _) => const SizedBox(width: 12),
       itemCount: books.length,
     );

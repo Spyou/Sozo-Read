@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import '../../../core/services/image_cache_manager.dart';
 import 'package:flutter/material.dart';
 import '../../../core/widgets/app_snack.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -1397,6 +1398,7 @@ class _BackdropHeader extends StatelessWidget {
       children: [
         if (cover != null)
           CachedNetworkImage(
+            cacheManager: appImageCacheManager,
             imageUrl: cover,
             httpHeaders: book.coverHeaders,
             fit: BoxFit.cover,
@@ -1435,6 +1437,7 @@ class _BackdropHeader extends StatelessWidget {
                     borderRadius: BorderRadius.circular(10),
                     child: cover != null
                         ? CachedNetworkImage(
+                            cacheManager: appImageCacheManager,
                             imageUrl: cover,
                             httpHeaders: book.coverHeaders,
                             fit: BoxFit.cover,
@@ -1539,6 +1542,7 @@ class _SkeletonDetail extends StatelessWidget {
               children: [
                 if (hasCover)
                   CachedNetworkImage(
+                    cacheManager: appImageCacheManager,
                     imageUrl: placeholder!.cover!,
                     httpHeaders: placeholder!.coverHeaders,
                     fit: BoxFit.cover,
@@ -1578,6 +1582,7 @@ class _SkeletonDetail extends StatelessWidget {
                               ? ClipRRect(
                                   borderRadius: BorderRadius.circular(10),
                                   child: CachedNetworkImage(
+                                    cacheManager: appImageCacheManager,
                                     imageUrl: placeholder!.cover!,
                                     httpHeaders: placeholder!.coverHeaders,
                                     fit: BoxFit.cover,
@@ -3064,6 +3069,7 @@ class _ChapterThumbnailState extends State<_ChapterThumbnail> {
         borderRadius: BorderRadius.circular(6),
         child: src != null
             ? CachedNetworkImage(
+                cacheManager: appImageCacheManager,
                 imageUrl: src,
                 fit: BoxFit.cover,
                 placeholder: (_, _) => Container(color: AppColors.card),

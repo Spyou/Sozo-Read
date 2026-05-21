@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import '../../../core/services/image_cache_manager.dart';
 import 'package:flutter/material.dart';
 import '../../../core/widgets/app_snack.dart';
 import 'package:go_router/go_router.dart';
@@ -406,6 +407,7 @@ class _Avatar extends StatelessWidget {
         children: [
           if (hasImage)
             CachedNetworkImage(
+              cacheManager: appImageCacheManager,
               imageUrl: url,
               fit: BoxFit.cover,
               fadeInDuration: const Duration(milliseconds: 180),

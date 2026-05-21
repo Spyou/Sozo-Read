@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:hive/hive.dart';
 
 import '../repository/downloads_repository.dart';
@@ -48,10 +49,45 @@ class DownloadsBackgroundService {
   /// IPC event name the service listens for to tear itself down.
   static const String stopEvent = 'stop';
 
-  /// One-time plugin configuration — registers the channel, the entry
-  /// point and the foreground-mode flag. Idempotent.
+  /// One-time plugin configuration — creates the Android notification
+  /// channel (required by Android 8+, strictly enforced by Android 14+),
+  /// then registers the entry point, channel, and foreground-mode flag
+  /// with `flutter_background_service`. Idempotent.
+  ///
+  /// On Android 14 (API 34) `startForeground` throws
+  /// `CannotPostForegroundServiceNotificationException` when the channel
+  /// referenced by the foreground notification doesn't exist yet —
+  /// `flutter_background_service` does NOT create the channel itself, so
+  /// we must do it here BEFORE configuring the service. Without this,
+  /// the very first `ensureRunning()` call kills the entire process.
   static Future<void> initialize() async {
     try {
+      // Channel must exist before configure() so the first startForeground
+      // notification has a valid target. Best-effort: a desktop / test
+      // run that doesn't resolve the Android impl falls through
+      // gracefully.
+      try {
+        final localNotif = FlutterLocalNotificationsPlugin();
+        final android = localNotif.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+        if (android != null) {
+          await android.createNotificationChannel(
+            const AndroidNotificationChannel(
+              channelId,
+              'Sozo Read · background sync',
+              description:
+                  'Keeps the app alive while downloads are running.',
+              // Low importance so the sticky icon doesn't ping the user.
+              // Foreground-service notifications can't be dismissed
+              // anyway — high importance would just add noise.
+              importance: Importance.low,
+            ),
+          );
+        }
+      } catch (e) {
+        debugPrint('[downloads-bg] channel create failed: $e');
+      }
+
       final service = FlutterBackgroundService();
       await service.configure(
         androidConfiguration: AndroidConfiguration(
@@ -64,6 +100,11 @@ class DownloadsBackgroundService {
           initialNotificationTitle: 'Sozo Read',
           initialNotificationContent: 'Downloads ready',
           foregroundServiceNotificationId: foregroundNotificationId,
+          // Tell the plugin (and via it, Android 14's strict type
+          // check) that we're using this service for data sync — must
+          // match the `android:foregroundServiceType="dataSync"` on the
+          // <service> tag in AndroidManifest.xml.
+          foregroundServiceTypes: const [AndroidForegroundType.dataSync],
         ),
         iosConfiguration: IosConfiguration(
           autoStart: false,
@@ -79,15 +120,27 @@ class DownloadsBackgroundService {
     }
   }
 
+  /// Circuit breaker — once a single `startService` attempt fails we
+  /// stop trying for the rest of the session. Without this, every Hive
+  /// box mutation re-fires the binder, which re-fires `ensureRunning`,
+  /// which can retrigger a fatal native exception (e.g.
+  /// `CannotPostForegroundServiceNotificationException` on Android 14)
+  /// inside the BackgroundService thread that the Dart `try/catch`
+  /// can't intercept.
+  static bool _disabledForSession = false;
+
   /// Start the service if it isn't already alive. Call this when the
   /// `queued` / `downloading` count goes from zero to one.
   static Future<void> ensureRunning() async {
+    if (_disabledForSession) return;
     try {
       final service = FlutterBackgroundService();
       if (await service.isRunning()) return;
       await service.startService();
     } catch (e) {
-      debugPrint('[downloads-bg] ensureRunning failed: $e');
+      debugPrint('[downloads-bg] ensureRunning failed: $e — disabling for '
+          'this session to avoid crash loop');
+      _disabledForSession = true;
     }
   }
 

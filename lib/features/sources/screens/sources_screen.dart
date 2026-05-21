@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import '../../../core/services/image_cache_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:hive/hive.dart';
@@ -954,6 +955,7 @@ class _SourceLogo extends StatelessWidget {
       return ClipRRect(
         borderRadius: BorderRadius.circular(8),
         child: CachedNetworkImage(
+          cacheManager: appImageCacheManager,
           imageUrl: logo!,
           width: 36,
           height: 36,

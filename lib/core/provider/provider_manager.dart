@@ -31,8 +31,6 @@ class _JsHost {
   final Dio dio;
   late final JavascriptRuntime _runtime;
   final Map<String, JsProvider> providers = {};
-  // Mutex so JS calls don't overlap (QuickJS is single-threaded).
-  Future<void> _queue = Future.value();
   // Per-source failure tracking. A provider with 3+ consecutive failures is
   // marked `broken`; one with any prior failure but a recent success may be
   // `degraded` until cleared.
@@ -60,26 +58,24 @@ class _JsHost {
   }
 
   /// Calls `__providers[sourceId][method](...args)` and returns the resolved
-  /// JSON string. Serialized via the per-host mutex.
+  /// JSON string.
+  ///
+  /// Concurrency note: we deliberately do NOT serialize calls behind a
+  /// host-wide mutex. QuickJS already serializes at the FFI layer
+  /// (`evaluate` is sync), and the JS bootstrap routes by source id +
+  /// uses unique fetch ids — there's no shared mutable JS state to
+  /// protect. A previous version had a `_queue` mutex which caused
+  /// search to fail under load: a slow provider (8-15s of HTTP fetches)
+  /// would queue every other provider AND every subsequent user search
+  /// behind it. The bloc's 10s per-source timeout then fired on calls
+  /// that hadn't even started running, producing "no sources reached".
   Future<String> call(String sourceId, String method, List<Object?> args) async {
-    final completer = Completer<void>();
-    final prev = _queue;
-    _queue = completer.future;
-    // Wait for the previous call to finish — but swallow its error so a
-    // panicking call from provider A can't poison the mutex for provider B.
-    try {
-      await prev;
-    } catch (_) {/* isolate: previous caller already received this error */}
     try {
       final v = await _runCall(sourceId, method, args);
       _recordSuccess(sourceId);
-      completer.complete();
       return v;
     } catch (e) {
       _recordFailure(sourceId, e);
-      // Always release the mutex even when this call threw, so other
-      // providers keep working.
-      completer.complete();
       rethrow;
     }
   }
@@ -113,11 +109,17 @@ class _JsHost {
     // ignore: avoid_print
     print('[$sourceId] -> $method');
     final asyncResult = await _runtime.evaluateAsync(expr);
-    _runtime.executePendingJob();
+    // flutter_js's `handlePromise` pumps the JS microtask queue
+    // internally via a 20ms periodic timer; calling executePendingJob
+    // here would just be a redundant FFI hop. The 15s ceiling is tighter
+    // than the previous 25s because the bloc-level per-source timeout is
+    // 10s — keeping these close together bounds how long the package's
+    // internal pump-timer keeps running after we've already abandoned
+    // the call (it auto-cancels when the JS promise resolves OR fails).
     final resolved = await _runtime
         .handlePromise(asyncResult)
-        .timeout(const Duration(seconds: 25), onTimeout: () {
-      throw JsRuntimeException('$method timed out after 25s');
+        .timeout(const Duration(seconds: 15), onTimeout: () {
+      throw JsRuntimeException('$method timed out after 15s');
     });
     // ignore: avoid_print
     print('[$sourceId] <- $method ok');

@@ -34,6 +34,11 @@ dependencies:
 
   # Images
   cached_network_image: ^3.4.1
+  # Direct dep on the cache backend so we can swap in a size-capped
+  # custom CacheManager (`AppImageCacheManager`) in place of
+  # `DefaultCacheManager`. cached_network_image already pulls this in
+  # transitively; declaring it here just makes the import explicit.
+  flutter_cache_manager: ^3.4.1
   shimmer: ^3.0.0
   flutter_svg: ^2.0.3
   palette_generator: ^0.3.3+5

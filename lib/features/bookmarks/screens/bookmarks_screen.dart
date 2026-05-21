@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import '../../../core/services/image_cache_manager.dart';
 import 'package:flutter/material.dart';
 import '../../../core/widgets/app_snack.dart';
 import 'package:go_router/go_router.dart';
@@ -491,6 +492,7 @@ class _Thumb extends StatelessWidget {
         borderRadius: BorderRadius.circular(4),
         child: src != null
             ? CachedNetworkImage(
+                cacheManager: appImageCacheManager,
                 imageUrl: src,
                 fit: BoxFit.cover,
                 placeholder: (_, _) => Container(color: AppColors.card),

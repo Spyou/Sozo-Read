@@ -1,4 +1,5 @@
 import 'package:cached_network_image/cached_network_image.dart';
+import '../../../core/services/image_cache_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -211,6 +212,7 @@ class _GithubAvatar extends StatelessWidget {
     );
     return ClipOval(
       child: CachedNetworkImage(
+        cacheManager: appImageCacheManager,
         imageUrl: url,
         width: size,
         height: size,

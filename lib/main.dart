@@ -138,6 +138,21 @@ class _SozoReadAppState extends State<SozoReadApp> with WidgetsBindingObserver {
     super.didChangeAppLifecycleState(state);
   }
 
+  /// Fired by the engine when Android signals memory pressure
+  /// (`onTrimMemory(TRIM_MEMORY_RUNNING_LOW)` etc). Drop every cached
+  /// decoded image so the next paint cycle frees back to the system.
+  /// Without this, the cache stays at its 64 MB cap even when the OS is
+  /// about to start killing background services — which previously
+  /// fragmented the heap enough to trigger native OOMs during the
+  /// downloads worker burst.
+  @override
+  void didHaveMemoryPressure() {
+    debugPrint('[memory] OS reported pressure — flushing image cache');
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
+    super.didHaveMemoryPressure();
+  }
+
   /// Polls every saved book's source for new chapters and fires a
   /// notification on growth. Throttled to once per [_chapterCheckCooldown]
   /// so a user toggling between apps doesn't trigger N network calls.

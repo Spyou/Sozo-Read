@@ -239,6 +239,40 @@ class DownloadsRepository {
     if (!Hive.isBoxOpen(bookSnapshotBoxName)) {
       await Hive.openBox<Map>(bookSnapshotBoxName);
     }
+    // Any `queued` / `downloading` entries left over from the previous
+    // launch belong to a worker that's gone — flip them to `paused`
+    // before anything else reads the box. Two reasons:
+    //   1. If the previous launch crashed mid-download, the next launch
+    //      should not auto-resume into the same crash. The user has to
+    //      explicitly tap Resume in the Downloads tab.
+    //   2. The background-service binder watches the box for active
+    //      entries and starts an Android foreground service when one
+    //      shows up. If we leave the queue "active" on boot, the
+    //      service starts before the UI is even painted — which is the
+    //      crash window for `CannotPostForegroundServiceNotificationException`
+    //      on some devices.
+    final box = Hive.box<Map>(boxName);
+    final updates = <String, Map<String, dynamic>>{};
+    for (final key in box.keys) {
+      final raw = box.get(key);
+      if (raw == null) continue;
+      try {
+        final entry =
+            DownloadEntry.fromJson(Map<String, dynamic>.from(raw));
+        if (entry.status == DownloadStatus.queued ||
+            entry.status == DownloadStatus.downloading) {
+          updates[key as String] = entry
+              .copyWith(
+                status: DownloadStatus.paused,
+                error: 'Auto-paused on app restart — tap Resume to continue.',
+              )
+              .toJson();
+        }
+      } catch (_) {/* corrupt row — leave alone */}
+    }
+    for (final entry in updates.entries) {
+      await box.put(entry.key, entry.value);
+    }
   }
 
   /// Wire up the connectivity listener. Idempotent — safe to call multiple

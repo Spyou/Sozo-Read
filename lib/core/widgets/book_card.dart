@@ -1,4 +1,5 @@
 import 'package:cached_network_image/cached_network_image.dart';
+import '../services/image_cache_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:shimmer/shimmer.dart';
 
@@ -10,6 +11,7 @@ class BookCard extends StatelessWidget {
     super.key,
     required this.book,
     this.onTap,
+    this.onLongPress,
     this.width = 124,
     this.progress,
     this.subtitle,
@@ -17,6 +19,7 @@ class BookCard extends StatelessWidget {
 
   final BookItem book;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
   final double width;
   final double? progress;
   final String? subtitle;
@@ -25,6 +28,7 @@ class BookCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
+      onLongPress: onLongPress,
       behavior: HitTestBehavior.opaque,
       child: SizedBox(
         width: width,
@@ -40,6 +44,7 @@ class BookCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(10),
                     child: book.cover != null
                         ? CachedNetworkImage(
+                            cacheManager: appImageCacheManager,
                             imageUrl: book.cover!,
                             httpHeaders: book.coverHeaders,
                             fit: BoxFit.cover,

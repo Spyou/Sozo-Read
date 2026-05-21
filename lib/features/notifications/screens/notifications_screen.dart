@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import '../../../core/services/image_cache_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hive/hive.dart';
@@ -165,6 +166,7 @@ class _NotificationRow extends StatelessWidget {
           borderRadius: BorderRadius.circular(6),
           child: (n.coverUrl != null && n.coverUrl!.isNotEmpty)
               ? CachedNetworkImage(
+                  cacheManager: appImageCacheManager,
                   imageUrl: n.coverUrl!,
                   fit: BoxFit.cover,
                   placeholder: (_, _) => Container(color: AppColors.card),

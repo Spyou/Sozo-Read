@@ -1,7 +1,8 @@
 import 'dart:io';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+
+import '../../../core/services/image_cache_manager.dart';
 import '../../../core/widgets/app_snack.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -31,7 +32,12 @@ class _StorageSettingsScreenState extends State<StorageSettingsScreen> {
   Future<int> _computeCacheSize() async {
     try {
       final tmp = await getTemporaryDirectory();
+      // Older builds wrote into `libCachedImageData` (cached_network_image's
+      // DefaultCacheManager default). Current builds use our size-capped
+      // `sozoread_image_cache`. Sum both so a user upgrading from an old
+      // install sees the legacy bytes too and can wipe them.
       final candidates = [
+        Directory('${tmp.path}/sozoread_image_cache'),
         Directory('${tmp.path}/libCachedImageData'),
         Directory('${tmp.path}/cached_network_image'),
       ];
@@ -54,6 +60,16 @@ class _StorageSettingsScreenState extends State<StorageSettingsScreen> {
   }
 
   Future<void> _clearCache() async {
+    // Empty the size-capped cache via its own API so the SQLite index
+    // and on-disk files stay in sync. (Manually removing the directory
+    // would leave the index thinking entries still exist, which breaks
+    // the next download.)
+    try {
+      await appImageCacheManager.emptyCache();
+    } catch (_) {/* best-effort */}
+    // Legacy directories from older builds aren't touched by the cache
+    // manager — scrub them by hand. Safe even on first install (no-op
+    // when the dirs don't exist).
     try {
       final tmp = await getTemporaryDirectory();
       for (final name in ['libCachedImageData', 'cached_network_image']) {
@@ -61,7 +77,10 @@ class _StorageSettingsScreenState extends State<StorageSettingsScreen> {
         if (await dir.exists()) await dir.delete(recursive: true);
       }
     } catch (_) {/* best-effort */}
-    await CachedNetworkImage.evictFromCache('');
+    // Drop in-memory image entries too so the visible UI re-fetches
+    // (or shows placeholders) after the clear.
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showAppSnack(
       const SnackBar(content: Text('Image cache cleared')),

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import '../../../../core/services/image_cache_manager.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import '../../../../core/widgets/app_snack.dart';
@@ -362,6 +363,7 @@ class _PageImageState extends State<PageImage> {
                   minScale: 1,
                   maxScale: 5,
                   child: CachedNetworkImage(
+                    cacheManager: appImageCacheManager,
                     imageUrl: widget.page.url,
                     httpHeaders: widget.page.headers,
                     fit: BoxFit.contain,
@@ -469,6 +471,7 @@ class _PageImageState extends State<PageImage> {
     }
 
     final networkImage = CachedNetworkImage(
+      cacheManager: appImageCacheManager,
       // Adding the attempt counter to the key forces a fresh image attempt
       // on each retry.
       key: ValueKey('${widget.page.url}#$_attempt'),

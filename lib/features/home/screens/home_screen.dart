@@ -19,6 +19,7 @@ import '../../../core/widgets/state_views.dart';
 import '../bloc/home_bloc.dart';
 import '../bloc/home_event.dart';
 import '../bloc/home_state.dart';
+import '../widgets/book_card_action_sheet.dart';
 import '../widgets/continue_reading_row.dart';
 import '../widgets/featured_carousel.dart';
 import '../widgets/featured_carousel_skeleton.dart';
@@ -198,6 +199,8 @@ class _HomeViewState extends State<_HomeView> {
                             loading: s.loading,
                             error: s.error,
                             onTapBook: (b) => _openDetail(context, b),
+                            onLongPressBook: (b) =>
+                                showBookCardActionSheet(context, b),
                           ),
                         ),
                       const SliverToBoxAdapter(child: SizedBox(height: 40)),
