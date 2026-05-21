@@ -25,11 +25,9 @@ import '../../../../core/widgets/state_views.dart';
 import '../../../settings/widgets/settings_dialogs.dart'
     show
         openMangaColorFilterSheet,
-        openMangaAutoScrollSheet,
         openMangaImageQualitySheet,
         openMangaOrientationLockSheet,
         colorFilterLabel,
-        autoScrollLabel,
         imageQualityLabel,
         orientationLockLabel;
 import '../../widgets/reading_bg_picker_sheet.dart';
@@ -106,6 +104,11 @@ class _ReaderViewState extends State<_ReaderView>
   Ticker? _autoScrollTicker;
   Duration _lastAutoTick = Duration.zero;
   MangaAutoScroll _autoScrollMode = MangaAutoScroll.off;
+
+  /// User-paused via the floating control. While true, the ticker still
+  /// runs (so it can resume cheaply) but each tick is a no-op. Distinct
+  /// from `_autoScrollMode == off` which destroys the ticker.
+  bool _autoScrollPaused = false;
   // Reactive speed read by the persistent ticker callback. Changing this
   // while the ticker is running takes effect on the next frame.
   double _autoScrollPxPerSec = 0;
@@ -161,12 +164,12 @@ class _ReaderViewState extends State<_ReaderView>
     final mangaPrefs = context.read<MangaPrefsCubit>();
     _applyKeepScreenOn(mangaPrefs.state.keepScreenOn);
     _applyOrientationLock(mangaPrefs.state.orientationLock);
-    _applyAutoScroll(mangaPrefs.state.autoScroll);
+    _applyAutoScroll(mangaPrefs.state);
     _mangaPrefsSub = mangaPrefs.stream.listen((p) {
       if (!mounted) return;
       _applyKeepScreenOn(p.keepScreenOn);
       _applyOrientationLock(p.orientationLock);
-      _applyAutoScroll(p.autoScroll);
+      _applyAutoScroll(p);
     });
   }
 
@@ -206,32 +209,66 @@ class _ReaderViewState extends State<_ReaderView>
     }
   }
 
-  void _applyAutoScroll(MangaAutoScroll mode) {
+  /// Maps the continuous 0..1 [MangaPrefs.autoScrollSpeed] slider to a
+  /// pixels-per-second value. 0 → ~15 px/s (very slow), 1 → ~300 px/s
+  /// (fast). Used whenever auto-scroll is enabled, regardless of which
+  /// preset bucket [MangaPrefs.autoScroll] sits in.
+  double _autoScrollPxPerSecFromFraction(double f) {
+    return 15.0 + 285.0 * f.clamp(0.0, 1.0);
+  }
+
+  /// Apply both [MangaPrefs.autoScroll] (on/off via the preset enum;
+  /// `off` tears down the ticker) and [MangaPrefs.autoScrollSpeed] (the
+  /// live px/sec value picked up by the running ticker). Listen on prefs
+  /// stream so slider drags + on/off toggles take effect immediately.
+  void _applyAutoScroll(MangaPrefs prefs) {
+    final mode = prefs.autoScroll;
+    // Live speed — picked up by the running ticker on every frame.
+    _autoScrollPxPerSec =
+        mode == MangaAutoScroll.off ? 0 : _autoScrollPxPerSecFromFraction(
+              prefs.autoScrollSpeed,
+            );
+
+    // On/off transition: spin up or tear down the ticker.
     if (mode == _autoScrollMode) return;
     _autoScrollMode = mode;
     _autoScrollEndFrames = 0;
-    _autoScrollPxPerSec = switch (mode) {
-      MangaAutoScroll.slow => 20.0,
-      MangaAutoScroll.medium => 50.0,
-      MangaAutoScroll.fast => 100.0,
-      MangaAutoScroll.off => 0.0,
-    };
     if (mode == MangaAutoScroll.off) {
       _autoScrollTicker?.stop();
+      _autoScrollPaused = false;
       return;
     }
     // SingleTickerProviderStateMixin only allows createTicker() to be called
     // ONCE per State — disposing and re-creating throws. So we lazy-create
-    // once, then stop/start the same Ticker on every toggle. Speed changes
-    // are picked up via _autoScrollPxPerSec on each frame.
+    // once, then stop/start the same Ticker on every toggle.
     _autoScrollTicker ??= createTicker(_onAutoScrollTick);
     _lastAutoTick = Duration.zero;
+    _autoScrollPaused = false;
     if (!_autoScrollTicker!.isActive) {
       _autoScrollTicker!.start();
     }
   }
 
+  /// Toggles the floating pause/play state without tearing down the
+  /// ticker. Called from the floating control.
+  void _toggleAutoScrollPaused() {
+    if (_autoScrollMode == MangaAutoScroll.off) return;
+    setState(() {
+      _autoScrollPaused = !_autoScrollPaused;
+      // Reset the time baseline so resume doesn't snap forward by the
+      // delta we accumulated while paused.
+      _lastAutoTick = Duration.zero;
+    });
+  }
+
   void _onAutoScrollTick(Duration elapsed) {
+    // User-paused via the floating control. Ticker stays alive so we
+    // can resume cheaply, but each frame is a no-op.
+    if (_autoScrollPaused) {
+      _lastAutoTick = elapsed;
+      _autoScrollEndFrames = 0;
+      return;
+    }
     // Paged/horizontal reader uses PageController, not ScrollController —
     // auto-scroll only makes sense for vertical/webtoon. The ScrollController
     // won't have clients there; we no-op those frames silently.
@@ -764,6 +801,26 @@ class _ReaderViewState extends State<_ReaderView>
                   ),
                 ),
 
+              // Floating pause/play pill — visible whenever auto-scroll
+              // is enabled AND the user hasn't hidden it via prefs.
+              // Lives outside the chrome-visibility gate so it stays on
+              // screen even when the user is reading with chrome hidden.
+              if (state.mode == ReaderMode.vertical &&
+                  _autoScrollMode != MangaAutoScroll.off &&
+                  context
+                      .watch<MangaPrefsCubit>()
+                      .state
+                      .showFloatingAutoScroll)
+                Positioned(
+                  right: 16,
+                  bottom: MediaQuery.of(context).size.height * 0.45,
+                  child: _AutoScrollFab(
+                    paused: _autoScrollPaused,
+                    onTap: _toggleAutoScrollPaused,
+                    onLongPress: _openAutoScrollSheet,
+                  ),
+                ),
+
               if (_chromeVisible) ...[
                 _TopBar(
                   state: state,
@@ -774,6 +831,7 @@ class _ReaderViewState extends State<_ReaderView>
                     }
                   },
                   onOpenSettings: () => _openSettingsSheet(state),
+                  onOpenAutoScroll: () => _openAutoScrollSheet(),
                   onMarkComplete: () => _markCompleted(state),
                   onCycleDirection: _cycleReadingDirection,
                 ),
@@ -869,6 +927,25 @@ class _ReaderViewState extends State<_ReaderView>
           child: BlocBuilder<MangaReaderBloc, MangaReaderState>(
             builder: (_, s) => _ReaderSettingsSheet(state: s, bloc: bloc),
           ),
+        );
+      },
+    );
+  }
+
+  /// Opens the dedicated auto-scroll bottom sheet — Enable toggle,
+  /// continuous speed slider, and the "show floating control" checkbox.
+  /// Same prefs cubit drives the sheet and the runtime, so dragging
+  /// the slider tunes the active ticker in real time.
+  Future<void> _openAutoScrollSheet() async {
+    final mangaPrefs = context.read<MangaPrefsCubit>();
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: false,
+      builder: (ctx) {
+        return BlocProvider.value(
+          value: mangaPrefs,
+          child: const _AutoScrollSheet(),
         );
       },
     );
@@ -1060,13 +1137,12 @@ class _ReaderSettingsSheet extends StatelessWidget {
                         onTap: () =>
                             openMangaColorFilterSheet(context, mp.colorFilter),
                       ),
-                      _SheetPickerRow(
-                        icon: Icons.swap_vert_rounded,
-                        label: 'Auto-scroll',
-                        valueLabel: autoScrollLabel(mp.autoScroll),
-                        onTap: () =>
-                            openMangaAutoScrollSheet(context, mp.autoScroll),
-                      ),
+                      // Auto-scroll moved out — the reader's top bar now
+                      // has a dedicated play-circle icon that opens the
+                      // full Auto-scroll sheet (enable + continuous speed
+                      // slider + floating control). Having a coarse
+                      // Slow/Medium/Fast picker here too just duplicated
+                      // the same setting in a worse UX.
                       _SheetPickerRow(
                         icon: Icons.high_quality_outlined,
                         label: 'Image quality',
@@ -1445,6 +1521,15 @@ class _VerticalReader extends StatelessWidget {
           final total = state.pages.length;
           if (max > 0 && total > 0) {
             final frac = (n.metrics.pixels / max).clamp(0.0, 1.0);
+            // Smooth-progress signal — fires on every scroll update so
+            // the bottom slider tracks the user's scroll continuously.
+            // Drives `chapterScrollFraction` in the bloc.
+            context
+                .read<MangaReaderBloc>()
+                .add(MangaReaderScrollFractionUpdated(frac));
+            // Discrete page-index signal — only fires on page-boundary
+            // crossings. Drives the "X / Y" indicator and the mark-as-
+            // read trigger that fires when the last image is reached.
             final idx = (frac * (total - 1)).round();
             if (idx != state.pageIndex) {
               context.read<MangaReaderBloc>().add(MangaReaderPageChanged(idx));
@@ -1729,6 +1814,7 @@ class _TopBar extends StatelessWidget {
     required this.onBack,
     required this.onOpenChapters,
     required this.onOpenSettings,
+    required this.onOpenAutoScroll,
     required this.onMarkComplete,
     required this.onCycleDirection,
   });
@@ -1736,6 +1822,7 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onBack;
   final VoidCallback onOpenChapters;
   final VoidCallback onOpenSettings;
+  final VoidCallback onOpenAutoScroll;
   final VoidCallback onMarkComplete;
   final VoidCallback onCycleDirection;
 
@@ -1805,6 +1892,20 @@ class _TopBar extends StatelessWidget {
                       tooltip: 'Chapters',
                       icon: const Icon(Icons.list, color: Colors.white),
                       onPressed: onOpenChapters,
+                    ),
+                    // Highlighted when auto-scroll is currently running
+                    // so the user can spot it without opening the sheet.
+                    IconButton(
+                      tooltip: 'Auto-scroll',
+                      icon: Icon(
+                        prefs.autoScroll == MangaAutoScroll.off
+                            ? Icons.play_circle_outline_rounded
+                            : Icons.play_circle_rounded,
+                        color: prefs.autoScroll == MangaAutoScroll.off
+                            ? Colors.white
+                            : AppColors.primary,
+                      ),
+                      onPressed: onOpenAutoScroll,
                     ),
                     IconButton(
                       tooltip: 'Settings',
@@ -2054,8 +2155,14 @@ class _BottomBar extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     if (total > 1)
+                      // Vertical mode uses the live scroll fraction so
+                      // the slider fills smoothly for manhwa (few long
+                      // strips → previously jumped 12-25% per page).
+                      // Paged mode keeps the discrete-page slider.
                       _PageSlider(
-                        current: pageIndex,
+                        current: state.mode == ReaderMode.vertical
+                            ? state.chapterScrollFraction * (total - 1)
+                            : pageIndex.toDouble(),
                         total: total,
                         onChange: onSliderChange,
                       ),
@@ -2102,12 +2209,17 @@ class _PageSlider extends StatelessWidget {
     required this.total,
     required this.onChange,
   });
-  final int current;
+
+  /// Continuous position along the slider in `[0, total - 1]`. Vertical
+  /// mode passes the smooth scroll fraction scaled by `(total - 1)`;
+  /// paged mode passes the integer page index cast to double.
+  final double current;
   final int total;
   final ValueChanged<double> onChange;
 
   @override
   Widget build(BuildContext context) {
+    final maxVal = (total - 1).toDouble();
     return SliderTheme(
       data: SliderTheme.of(context).copyWith(
         trackHeight: 3,
@@ -2119,9 +2231,181 @@ class _PageSlider extends StatelessWidget {
       ),
       child: Slider(
         min: 0,
-        max: (total - 1).toDouble(),
-        value: current.toDouble().clamp(0, (total - 1).toDouble()),
+        max: maxVal,
+        value: current.clamp(0.0, maxVal),
         onChanged: onChange,
+      ),
+    );
+  }
+}
+
+/// Bottom sheet driving auto-scroll: Enable toggle, continuous speed
+/// slider, floating-control toggle. Subscribes to [MangaPrefsCubit]
+/// so any drag updates the running ticker live.
+class _AutoScrollSheet extends StatelessWidget {
+  const _AutoScrollSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocBuilder<MangaPrefsCubit, MangaPrefs>(
+      builder: (context, prefs) {
+        final cubit = context.read<MangaPrefsCubit>();
+        final enabled = prefs.autoScroll != MangaAutoScroll.off;
+        return Container(
+          decoration: const BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 12, 18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Automatic scroll',
+                          style: TextStyle(
+                            color: AppColors.textPrimary,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Close',
+                        icon: const Icon(Icons.close_rounded,
+                            color: AppColors.textSecondary),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Enable',
+                          style: TextStyle(
+                            color: AppColors.textPrimary,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      Switch.adaptive(
+                        value: enabled,
+                        activeTrackColor: AppColors.primary,
+                        onChanged: (v) {
+                          // Persist as the medium-ish preset bucket so
+                          // pre-existing code paths that only look at
+                          // the enum still behave sensibly; the
+                          // continuous slider above drives the real
+                          // speed at runtime.
+                          cubit.setAutoScroll(
+                            v ? MangaAutoScroll.medium : MangaAutoScroll.off,
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
+                    'Speed',
+                    style: TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      thumbColor: AppColors.primary,
+                      activeTrackColor: AppColors.primary,
+                      inactiveTrackColor: AppColors.card,
+                      overlayShape:
+                          const RoundSliderOverlayShape(overlayRadius: 14),
+                      thumbShape:
+                          const RoundSliderThumbShape(enabledThumbRadius: 9),
+                      trackHeight: 4,
+                    ),
+                    child: Slider(
+                      min: 0,
+                      max: 1,
+                      value: prefs.autoScrollSpeed,
+                      onChanged: enabled
+                          ? (v) => cubit.setAutoScrollSpeed(v)
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Show floating control button',
+                          style: TextStyle(
+                            color: AppColors.textPrimary,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      Checkbox.adaptive(
+                        value: prefs.showFloatingAutoScroll,
+                        activeColor: AppColors.primary,
+                        onChanged: (v) =>
+                            cubit.setShowFloatingAutoScroll(v ?? true),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Floating pause/play pill that overlays the reader when auto-scroll
+/// is enabled. Tap toggles pause; long-press opens the [_AutoScrollSheet]
+/// for live tuning without leaving the reader.
+class _AutoScrollFab extends StatelessWidget {
+  const _AutoScrollFab({
+    required this.paused,
+    required this.onTap,
+    required this.onLongPress,
+  });
+  final bool paused;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.55),
+      shape: const CircleBorder(),
+      elevation: 4,
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        onLongPress: onLongPress,
+        child: Container(
+          width: 44,
+          height: 44,
+          alignment: Alignment.center,
+          child: Icon(
+            paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+            color: Colors.white,
+            size: 24,
+          ),
+        ),
       ),
     );
   }

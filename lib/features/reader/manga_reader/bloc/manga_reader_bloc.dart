@@ -24,6 +24,7 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
     on<MangaReaderStarted>(_onStarted);
     on<MangaReaderChapterChanged>(_onChapterChanged);
     on<MangaReaderPageChanged>(_onPageChanged);
+    on<MangaReaderScrollFractionUpdated>(_onScrollFractionUpdated);
     on<MangaReaderModeToggled>(_onModeToggled);
     on<MangaReaderDirectionToggled>(_onDirectionToggled);
     on<MangaReaderModeSet>(_onModeSet);
@@ -136,6 +137,10 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
     emit(state.copyWith(
       chapterIndex: i,
       pageIndex: 0,
+      // Reset the smooth-scroll progress to 0 so the slider doesn't
+      // visually retain the previous chapter's position while the next
+      // one loads.
+      chapterScrollFraction: 0,
       autoAdvancing: true,
       clearResume: true,
     ));
@@ -199,6 +204,29 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
         }
       }
     }
+  }
+
+  /// Vertical-mode scroll progress. Drives the smooth slider in the
+  /// bottom bar and the library's `lastChapterProgress` (so resume on
+  /// re-open lands on the exact pixel, not the nearest page boundary).
+  /// Also fires the "end of chapter" mark-read trigger for vertical
+  /// mode — if the user scrolls past 99% of a chapter that has long
+  /// strips (so page boundaries never quite reach `pages.length - 1`),
+  /// we now still detect chapter completion.
+  void _onScrollFractionUpdated(
+    MangaReaderScrollFractionUpdated event,
+    Emitter<MangaReaderState> emit,
+  ) {
+    final frac = event.fraction.clamp(0.0, 1.0);
+    emit(state.copyWith(chapterScrollFraction: frac));
+    final book = state.book;
+    if (book == null || state.pages.isEmpty) return;
+    _library.updateProgress(
+      sourceId: book.sourceId,
+      bookId: book.id,
+      chapterIndex: state.chapterIndex,
+      chapterProgress: frac,
+    );
   }
 
   void _onModeToggled(MangaReaderModeToggled event, Emitter<MangaReaderState> emit) {

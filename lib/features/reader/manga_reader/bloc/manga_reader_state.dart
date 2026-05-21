@@ -29,6 +29,14 @@ class MangaReaderState extends Equatable {
   /// [MangaReaderResumeConsumed].
   final double? pendingResumeProgress;
 
+  /// 0..1 — continuous scroll fraction for vertical/webtoon mode. Drives
+  /// the smooth progress slider in the bottom bar (so manhwa with only
+  /// a handful of long strips doesn't jump in big chunks per "page").
+  /// Always derived from the live ScrollController; reset to 0 when a
+  /// new chapter loads. Paged mode keeps this at 0 and uses pageIndex
+  /// for its slider value.
+  final double chapterScrollFraction;
+
   const MangaReaderState({
     this.book,
     this.chapterIndex = 0,
@@ -41,6 +49,7 @@ class MangaReaderState extends Equatable {
     this.brightness = 0,
     this.autoAdvancing = false,
     this.pendingResumeProgress,
+    this.chapterScrollFraction = 0,
   });
 
   MangaReaderState copyWith({
@@ -55,6 +64,7 @@ class MangaReaderState extends Equatable {
     double? brightness,
     bool? autoAdvancing,
     double? pendingResumeProgress,
+    double? chapterScrollFraction,
     bool clearError = false,
     bool clearResume = false,
   }) =>
@@ -72,6 +82,8 @@ class MangaReaderState extends Equatable {
         pendingResumeProgress: clearResume
             ? null
             : (pendingResumeProgress ?? this.pendingResumeProgress),
+        chapterScrollFraction:
+            chapterScrollFraction ?? this.chapterScrollFraction,
       );
 
   @override
@@ -87,5 +99,6 @@ class MangaReaderState extends Equatable {
         brightness,
         autoAdvancing,
         pendingResumeProgress,
+        chapterScrollFraction,
       ];
 }

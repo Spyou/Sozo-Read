@@ -54,6 +54,18 @@ class MangaReaderPageChanged extends MangaReaderEvent {
   List<Object?> get props => [pageIndex];
 }
 
+/// Vertical/webtoon mode emits this on every scroll update so the
+/// progress slider in the bottom bar tracks the user's scroll smoothly.
+/// Distinct from [MangaReaderPageChanged] — that one only fires when
+/// crossing a page boundary, which is too coarse for manhwa (3-8 long
+/// strips per chapter = 12-25% jumps per page).
+class MangaReaderScrollFractionUpdated extends MangaReaderEvent {
+  const MangaReaderScrollFractionUpdated(this.fraction);
+  final double fraction;
+  @override
+  List<Object?> get props => [fraction];
+}
+
 class MangaReaderModeToggled extends MangaReaderEvent {
   const MangaReaderModeToggled();
 }

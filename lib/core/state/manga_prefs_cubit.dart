@@ -41,6 +41,9 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
   static const String _kOrientationLock = 'manga.orientation_lock';
   static const String _kKeepScreenOn = 'manga.keep_screen_on';
   static const String _kTapZoneNavigation = 'manga.tap_zone_navigation';
+  static const String _kAutoScrollSpeed = 'manga.auto_scroll_speed';
+  static const String _kShowFloatingAutoScroll =
+      'manga.show_floating_auto_scroll';
 
   static const MangaReadingDirection defaultDirection =
       MangaReadingDirection.vertical;
@@ -52,6 +55,11 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
       MangaOrientationLock.auto;
   static const bool defaultKeepScreenOn = true;
   static const bool defaultTapZoneNavigation = true;
+
+  /// Continuous auto-scroll speed in `[0..1]`. 0.33 ≈ medium preset.
+  /// Maps to ~15-300 px/sec in [MangaReaderBloc._applyAutoScroll].
+  static const double defaultAutoScrollSpeed = 0.33;
+  static const bool defaultShowFloatingAutoScroll = true;
 
   static Box get _box => Hive.box(_boxName);
 
@@ -67,6 +75,12 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
       keepScreenOn: (_box.get(_kKeepScreenOn) as bool?) ?? defaultKeepScreenOn,
       tapZoneNavigation:
           (_box.get(_kTapZoneNavigation) as bool?) ?? defaultTapZoneNavigation,
+      autoScrollSpeed: ((_box.get(_kAutoScrollSpeed) as num?)?.toDouble() ??
+              defaultAutoScrollSpeed)
+          .clamp(0.0, 1.0),
+      showFloatingAutoScroll:
+          (_box.get(_kShowFloatingAutoScroll) as bool?) ??
+              defaultShowFloatingAutoScroll,
     );
   }
 
@@ -169,6 +183,19 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
     _box.put(_kTapZoneNavigation, v);
     emit(state.copyWith(tapZoneNavigation: v));
   }
+
+  void setAutoScrollSpeed(double v) {
+    final clamped = v.clamp(0.0, 1.0);
+    if (clamped == state.autoScrollSpeed) return;
+    _box.put(_kAutoScrollSpeed, clamped);
+    emit(state.copyWith(autoScrollSpeed: clamped));
+  }
+
+  void setShowFloatingAutoScroll(bool v) {
+    if (v == state.showFloatingAutoScroll) return;
+    _box.put(_kShowFloatingAutoScroll, v);
+    emit(state.copyWith(showFloatingAutoScroll: v));
+  }
 }
 
 class MangaPrefs extends Equatable {
@@ -181,6 +208,9 @@ class MangaPrefs extends Equatable {
     required this.orientationLock,
     required this.keepScreenOn,
     required this.tapZoneNavigation,
+    this.autoScrollSpeed = MangaPrefsCubit.defaultAutoScrollSpeed,
+    this.showFloatingAutoScroll =
+        MangaPrefsCubit.defaultShowFloatingAutoScroll,
   });
 
   final MangaReadingDirection readingDirection;
@@ -192,6 +222,16 @@ class MangaPrefs extends Equatable {
   final bool keepScreenOn;
   final bool tapZoneNavigation;
 
+  /// Continuous 0..1 speed for auto-scroll. The reader maps this to
+  /// pixels/sec at runtime so the preset enum [autoScroll] stays usable
+  /// as a coarse on/off + bucket signal for older code paths, while
+  /// fine-grained tuning happens here.
+  final double autoScrollSpeed;
+
+  /// Whether the floating pause/play pill shows on the reader while
+  /// auto-scroll is enabled. Default true.
+  final bool showFloatingAutoScroll;
+
   MangaPrefs copyWith({
     MangaReadingDirection? readingDirection,
     bool? cropEdges,
@@ -201,6 +241,8 @@ class MangaPrefs extends Equatable {
     MangaOrientationLock? orientationLock,
     bool? keepScreenOn,
     bool? tapZoneNavigation,
+    double? autoScrollSpeed,
+    bool? showFloatingAutoScroll,
   }) =>
       MangaPrefs(
         readingDirection: readingDirection ?? this.readingDirection,
@@ -211,6 +253,9 @@ class MangaPrefs extends Equatable {
         orientationLock: orientationLock ?? this.orientationLock,
         keepScreenOn: keepScreenOn ?? this.keepScreenOn,
         tapZoneNavigation: tapZoneNavigation ?? this.tapZoneNavigation,
+        autoScrollSpeed: autoScrollSpeed ?? this.autoScrollSpeed,
+        showFloatingAutoScroll:
+            showFloatingAutoScroll ?? this.showFloatingAutoScroll,
       );
 
   @override
@@ -223,5 +268,7 @@ class MangaPrefs extends Equatable {
         orientationLock,
         keepScreenOn,
         tapZoneNavigation,
+        autoScrollSpeed,
+        showFloatingAutoScroll,
       ];
 }
