@@ -2379,6 +2379,14 @@ class _BookmarksTabState extends State<_BookmarksTab> {
   // image swaps in without needing the user to scroll away and back.
   StreamSubscription<BoxEvent>? _thumbsSub;
 
+  // Section + group expansion. Default everything to expanded; the user
+  // collapses what they don't want to see. Page groups track the
+  // *collapsed* chapter ids (inverse) so freshly-bookmarked chapters
+  // appear expanded by default without needing to populate the set.
+  bool _chaptersExpanded = true;
+  bool _pagesExpanded = true;
+  final Set<String> _collapsedPageGroups = <String>{};
+
   @override
   void initState() {
     super.initState();
@@ -2578,84 +2586,118 @@ class _BookmarksTabState extends State<_BookmarksTab> {
       );
     }
 
+    // Group page bookmarks by chapter id so the user can collapse the
+    // bookmarks for a single chapter independently. LinkedHashMap
+    // semantics (Dart's default) preserve repo insertion order across
+    // the keys — i.e. the first chapter the user bookmarked a page in
+    // appears first.
+    final pageGroups = <String, List<PageBookmark>>{};
+    for (final b in pageBookmarks) {
+      (pageGroups[b.chapterId] ??= <PageBookmark>[]).add(b);
+    }
+
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
         if (chapterBookmarks.isNotEmpty) ...[
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 8, 16, 6),
-            child: _BookmarksSectionLabel('Chapters'),
+          _BookmarksSectionHeader(
+            text: 'Chapters',
+            count: chapterBookmarks.length,
+            expanded: _chaptersExpanded,
+            onTap: () => setState(
+                () => _chaptersExpanded = !_chaptersExpanded),
           ),
-          for (final b in chapterBookmarks)
-            ListTile(
-              dense: true,
-              contentPadding: const EdgeInsets.symmetric(
-                  vertical: 4, horizontal: 16),
-              leading: _ChapterThumbnail(
-                url: sl<ChapterThumbnailsRepository>().get(
-                    b.sourceId, b.bookId, b.chapterId),
-                fallbackUrl: widget.book.cover,
+          if (_chaptersExpanded)
+            for (final b in chapterBookmarks)
+              ListTile(
+                dense: true,
+                contentPadding: const EdgeInsets.symmetric(
+                    vertical: 4, horizontal: 16),
+                leading: _ChapterThumbnail(
+                  url: sl<ChapterThumbnailsRepository>().get(
+                      b.sourceId, b.bookId, b.chapterId),
+                  fallbackUrl: widget.book.cover,
+                ),
+                title: Text(
+                  _titleForChapter(b.chapterId),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: AppColors.textPrimary),
+                ),
+                subtitle: _BookmarkSubtitle(
+                  primary: _formatDate(b.addedAt),
+                  note: b.note,
+                ),
+                trailing: _BookmarkRowMenu(
+                  hasNote: b.note != null && b.note!.isNotEmpty,
+                  onEditNote: () => _editChapterNote(b),
+                  onRemove: () => _removeChapter(b),
+                ),
+                onTap: () {
+                  final i = _indexForChapter(b.chapterId);
+                  if (i != null) widget.onOpenChapter(i);
+                },
+                onLongPress: () => _editChapterNote(b),
               ),
-              title: Text(
-                _titleForChapter(b.chapterId),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: AppColors.textPrimary),
-              ),
-              subtitle: _BookmarkSubtitle(
-                primary: _formatDate(b.addedAt),
-                note: b.note,
-              ),
-              trailing: _BookmarkRowMenu(
-                hasNote: b.note != null && b.note!.isNotEmpty,
-                onEditNote: () => _editChapterNote(b),
-                onRemove: () => _removeChapter(b),
-              ),
-              onTap: () {
-                final i = _indexForChapter(b.chapterId);
-                if (i != null) widget.onOpenChapter(i);
-              },
-              onLongPress: () => _editChapterNote(b),
-            ),
         ],
         if (pageBookmarks.isNotEmpty) ...[
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 16, 16, 6),
-            child: _BookmarksSectionLabel('Pages'),
+          _BookmarksSectionHeader(
+            text: 'Pages',
+            count: pageBookmarks.length,
+            expanded: _pagesExpanded,
+            onTap: () =>
+                setState(() => _pagesExpanded = !_pagesExpanded),
+            topPadding: 16,
           ),
-          for (final b in pageBookmarks)
-            ListTile(
-              dense: true,
-              contentPadding: const EdgeInsets.symmetric(
-                  vertical: 4, horizontal: 16),
-              leading: _ChapterThumbnail(
-                url: b.pageUrl,
-                fallbackUrl: widget.book.cover,
+          if (_pagesExpanded)
+            for (final entry in pageGroups.entries) ...[
+              _PageGroupHeader(
+                title: _titleForChapter(entry.key),
+                count: entry.value.length,
+                expanded: !_collapsedPageGroups.contains(entry.key),
+                onTap: () => setState(() {
+                  if (_collapsedPageGroups.contains(entry.key)) {
+                    _collapsedPageGroups.remove(entry.key);
+                  } else {
+                    _collapsedPageGroups.add(entry.key);
+                  }
+                }),
               ),
-              title: Text(
-                _titleForChapter(b.chapterId),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: AppColors.textPrimary),
-              ),
-              subtitle: _BookmarkSubtitle(
-                primary:
-                    'Page ${b.pageIndex + 1} · ${_formatDate(b.addedAt)}',
-                note: b.note,
-              ),
-              trailing: _BookmarkRowMenu(
-                hasNote: b.note != null && b.note!.isNotEmpty,
-                onEditNote: () => _editPageNote(b),
-                onRemove: () => _removePage(b),
-              ),
-              onTap: () {
-                final i = _indexForChapter(b.chapterId);
-                if (i != null) {
-                  widget.onOpenChapterAtPage(i, b.pageIndex);
-                }
-              },
-              onLongPress: () => _editPageNote(b),
-            ),
+              if (!_collapsedPageGroups.contains(entry.key))
+                for (final b in entry.value)
+                  ListTile(
+                    dense: true,
+                    contentPadding: const EdgeInsets.fromLTRB(
+                        28, 4, 16, 4),
+                    leading: _ChapterThumbnail(
+                      url: b.pageUrl,
+                      fallbackUrl: widget.book.cover,
+                    ),
+                    title: Text(
+                      'Page ${b.pageIndex + 1}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          const TextStyle(color: AppColors.textPrimary),
+                    ),
+                    subtitle: _BookmarkSubtitle(
+                      primary: _formatDate(b.addedAt),
+                      note: b.note,
+                    ),
+                    trailing: _BookmarkRowMenu(
+                      hasNote: b.note != null && b.note!.isNotEmpty,
+                      onEditNote: () => _editPageNote(b),
+                      onRemove: () => _removePage(b),
+                    ),
+                    onTap: () {
+                      final i = _indexForChapter(b.chapterId);
+                      if (i != null) {
+                        widget.onOpenChapterAtPage(i, b.pageIndex);
+                      }
+                    },
+                    onLongPress: () => _editPageNote(b),
+                  ),
+            ],
         ],
         const SizedBox(height: 24),
       ],
@@ -2663,19 +2705,135 @@ class _BookmarksTabState extends State<_BookmarksTab> {
   }
 }
 
-class _BookmarksSectionLabel extends StatelessWidget {
-  const _BookmarksSectionLabel(this.text);
+/// Top-level bookmark section header (CHAPTERS / PAGES). Tappable —
+/// flips the parent's expanded state — and shows the section's
+/// bookmark count + a chevron reflecting open/closed state. Replaces
+/// the old plain text label so the user can collapse a long section
+/// without scrolling past it.
+class _BookmarksSectionHeader extends StatelessWidget {
+  const _BookmarksSectionHeader({
+    required this.text,
+    required this.count,
+    required this.expanded,
+    required this.onTap,
+    this.topPadding = 8,
+  });
+
   final String text;
+  final int count;
+  final bool expanded;
+  final VoidCallback onTap;
+  final double topPadding;
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      text.toUpperCase(),
-      style: TextStyle(
-        color: Theme.of(context).colorScheme.primary,
-        fontSize: 11,
-        fontWeight: FontWeight.w800,
-        letterSpacing: 1.2,
+    final accent = Theme.of(context).colorScheme.primary;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(8, topPadding, 8, 0),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding:
+              const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: Row(
+            children: [
+              Text(
+                text.toUpperCase(),
+                style: TextStyle(
+                  color: accent,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '($count)',
+                style: const TextStyle(
+                  color: AppColors.textTertiary,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const Spacer(),
+              Icon(
+                expanded ? Icons.expand_less : Icons.expand_more,
+                color: AppColors.textTertiary,
+                size: 20,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Sub-header inside the PAGES section that groups page bookmarks by
+/// chapter. Each group is independently collapsible so a chapter with
+/// many bookmarked panels doesn't push the rest of the list off-screen.
+class _PageGroupHeader extends StatelessWidget {
+  const _PageGroupHeader({
+    required this.title,
+    required this.count,
+    required this.expanded,
+    required this.onTap,
+  });
+
+  final String title;
+  final int count;
+  final bool expanded;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            Icon(
+              expanded
+                  ? Icons.keyboard_arrow_down
+                  : Icons.keyboard_arrow_right,
+              color: AppColors.textSecondary,
+              size: 20,
+            ),
+            const SizedBox(width: 2),
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppColors.card,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '$count',
+                style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
