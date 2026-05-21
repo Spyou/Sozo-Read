@@ -20,6 +20,8 @@ import 'repository/page_bookmarks_repository.dart';
 import 'repository/provider_repository.dart';
 import 'repository/read_chapters_repository.dart';
 import 'repository/tracker_repository.dart';
+import 'services/download_notification_service.dart';
+import 'services/downloads_background_service.dart';
 import 'services/notification_service.dart';
 import 'trackers/anilist/anilist_tracker.dart';
 import 'trackers/mal/mal_tracker.dart';
@@ -112,6 +114,24 @@ class AppBootstrap {
     // [ChapterCheckLifecycleObserver] (wired in main.dart) for the
     // on-resume replacement.
     await sl<NotificationService>().init();
+
+    // Android foreground service for in-progress downloads. Configures
+    // the plugin (channel + entry point) but does NOT start it — the
+    // lifecycle binder below flips it on the first time the queue
+    // becomes non-empty and back off when it drains. iOS gets the
+    // plugin's default ~30s background grace.
+    await DownloadsBackgroundService.initialize();
+
+    // Persistent system notification that mirrors the active queue.
+    // Attaches its own Hive box subscription; cheap to start even
+    // when the queue is empty (it just renders nothing).
+    await sl<DownloadNotificationService>().start();
+
+    // Drive foreground-service lifecycle off the same Hive box. The
+    // returned subscription lives for the process lifetime — there is
+    // no global teardown hook, but `Hive.close()` during shutdown
+    // tears the stream down cleanly.
+    bindDownloadsBackgroundLifecycle(sl<DownloadsRepository>());
   }
 }
 

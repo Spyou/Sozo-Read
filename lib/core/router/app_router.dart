@@ -46,6 +46,7 @@ GoRouter? get appRouter => _routerRef;
 /// Supported:
 ///   `sozoread://manga/{sourceId}/{bookId}?url={encoded}`
 ///   `sozoread://chapter/{sourceId}/{bookId}/{chapterIndex}?bookUrl={encoded}`
+///   `sozoread://downloads`
 String? parseSozoReadDeepLink(Uri uri) {
   if (uri.scheme != 'sozoread') return null;
   // On iOS the host is the first path segment (`manga`/`chapter`); on Android
@@ -56,6 +57,11 @@ String? parseSozoReadDeepLink(Uri uri) {
   ];
   if (segments.isEmpty) return null;
   final kind = segments.first;
+  // Tapping the persistent downloads notification fires this — route the
+  // user straight to the downloads queue screen.
+  if (kind == 'downloads') {
+    return '/downloads';
+  }
   if (kind == 'login-callback') {
     // Forward the full URI (incl. fragment / query) as the `link` param so the
     // callback route can hand it to `getSessionFromUrl`.

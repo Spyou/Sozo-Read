@@ -15,6 +15,7 @@ import '../../../core/di/injection.dart';
 import '../../../core/models/book_detail.dart';
 import '../../../core/models/book_item.dart';
 import '../../../core/models/chapter.dart';
+import '../../../core/models/page_content.dart';
 import '../../../core/models/provider_info.dart';
 import '../../../core/repository/book_detail_cache.dart';
 import '../../../core/repository/chapter_bookmarks_repository.dart';
@@ -229,6 +230,122 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
   bool? _displayCacheAscending;
   String? _displayCacheQuery;
 
+  // Multi-select state for batch chapter actions (download / mark
+  // read). Enter mode via long-press on a chapter row. Set holds the
+  // selected chapter IDs (stable across re-sorts) — exits to empty +
+  // [_selectMode] = false when the user cancels or completes an action.
+  bool _selectMode = false;
+  final Set<String> _selectedChapterIds = <String>{};
+
+  void _enterSelectMode(Chapter ch) {
+    setState(() {
+      _selectMode = true;
+      _selectedChapterIds.add(ch.id);
+    });
+  }
+
+  void _toggleSelected(Chapter ch) {
+    setState(() {
+      if (_selectedChapterIds.contains(ch.id)) {
+        _selectedChapterIds.remove(ch.id);
+        // Auto-exit when the user deselects the last row — saves them
+        // an explicit X tap.
+        if (_selectedChapterIds.isEmpty) _selectMode = false;
+      } else {
+        _selectedChapterIds.add(ch.id);
+      }
+    });
+  }
+
+  void _exitSelectMode() {
+    setState(() {
+      _selectMode = false;
+      _selectedChapterIds.clear();
+    });
+  }
+
+  /// Looks up the chapters whose IDs match the current selection. Walks
+  /// [book.chapters] once so the result is in source order (newest-first).
+  List<Chapter> _selectedChapters(BookDetail book) {
+    if (_selectedChapterIds.isEmpty) return const [];
+    return [
+      for (final ch in book.chapters)
+        if (_selectedChapterIds.contains(ch.id)) ch,
+    ];
+  }
+
+  Future<void> _enqueueChapters(
+    BookDetail book,
+    List<Chapter> chapters,
+  ) async {
+    if (chapters.isEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final providerRepo = sl<ProviderRepository>();
+    // The foundation agent's enqueueMany handles per-chapter errors
+    // (logs + skips), so we don't try/catch here — only the outer call
+    // could throw (e.g. Hive write error) which we surface generically.
+    try {
+      await sl<DownloadsRepository>().enqueueMany(
+        book: book,
+        chapters: chapters,
+        fetchPages: (ch) => providerRepo
+            .pages(book.sourceId, ch.url)
+            .then((r) => r.fold((_) => <PageContent>[], (p) => p)),
+        dio: sl<Dio>(),
+      );
+      messenger.showAppSnack(
+        SnackBar(
+          content: Text(
+            'Downloading ${chapters.length} chapter${chapters.length == 1 ? '' : 's'}',
+          ),
+        ),
+      );
+    } catch (e) {
+      messenger.showAppSnack(
+        SnackBar(content: Text('Could not start downloads: $e')),
+      );
+    }
+  }
+
+  Future<void> _downloadSelected(BookDetail book) async {
+    final chapters = _selectedChapters(book);
+    if (chapters.isEmpty) return;
+    await _enqueueChapters(book, chapters);
+    if (!mounted) return;
+    _exitSelectMode();
+  }
+
+  Future<void> _markSelected(BookDetail book, {required bool read}) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final repo = sl<ReadChaptersRepository>();
+    final ids = List<String>.from(_selectedChapterIds);
+    for (final id in ids) {
+      try {
+        if (read) {
+          await repo.mark(book.sourceId, book.id, id);
+        } else {
+          await repo.unmark(book.sourceId, book.id, id);
+        }
+      } catch (_) {
+        // Swallow per-chapter so one bad row doesn't kill the batch.
+      }
+    }
+    if (!mounted) return;
+    messenger.showAppSnack(
+      SnackBar(
+        content: Text(
+          read
+              ? 'Marked ${ids.length} chapter${ids.length == 1 ? '' : 's'} as read'
+              : 'Marked ${ids.length} chapter${ids.length == 1 ? '' : 's'} as unread',
+        ),
+      ),
+    );
+    _exitSelectMode();
+    // Force a rebuild so the read-state opacity in the chapter list
+    // updates without waiting for the bloc to refresh.
+    setState(() {});
+  }
+
   bool _onScroll(ScrollNotification n) {
     // Only react to vertical scrolls in the outer (header) viewport.
     if (n.metrics.axis != Axis.vertical) return false;
@@ -344,9 +461,19 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
     final onToggleLibrary = widget.onToggleLibrary;
     final onOpenChapter = widget.onOpenChapter;
 
-    return NotificationListener<ScrollNotification>(
-      onNotification: _onScroll,
-      child: NestedScrollView(
+    return PopScope(
+      // Intercept the back gesture/button while multi-select is active
+      // so the user lands back on the chapter list instead of popping
+      // the whole detail screen.
+      canPop: !_selectMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selectMode) _exitSelectMode();
+      },
+      child: Stack(
+        children: [
+          NotificationListener<ScrollNotification>(
+            onNotification: _onScroll,
+            child: NestedScrollView(
       headerSliverBuilder: (context, _) => [
         SliverAppBar(
           expandedHeight: _expandedHeight,
@@ -512,6 +639,15 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
                       localTitle: book.title,
                     ),
                   ),
+                // Batch-download shortcut row. Only shown when there's
+                // at least one chapter AND the user hasn't already
+                // finished everything (otherwise both buttons would
+                // be no-ops). Sits between the primary actions and
+                // the tab bar so it stays close to the chapter list
+                // Quick-batch buttons (Download next 5 / Download all
+                // unread) intentionally removed — they cluttered the
+                // detail header. Same actions are available via the
+                // long-press multi-select flow on the chapter list.
               ],
             ),
           ),
@@ -593,6 +729,8 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
                                       final read = widget.readChapterIds
                                               .contains(ch.id) ||
                                           i < lastChapterIndex;
+                                      final selected = _selectedChapterIds
+                                          .contains(ch.id);
                                       final titleStyle = TextStyle(
                                         color: read
                                             ? AppColors.textTertiary
@@ -607,62 +745,111 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
                                         overflow: TextOverflow.ellipsis,
                                         style: titleStyle,
                                       );
-                                      return ListTile(
-                                        dense: true,
-                                        contentPadding:
-                                            const EdgeInsets.symmetric(
-                                                vertical: 4, horizontal: 16),
-                                        onTap: () => onOpenChapter(i),
-                                        leading: Opacity(
-                                          opacity: read ? 0.5 : 1.0,
-                                          child: _ChapterThumbnail(
-                                            // `url: null` triggers the
-                                            // widget's own self-watch
-                                            // against the repo for THIS
-                                            // chapterId only.
-                                            url: null,
-                                            fallbackUrl: book.cover,
-                                            sourceId: book.sourceId,
-                                            bookId: book.id,
-                                            chapter: ch,
-                                          ),
-                                        ),
-                                        title: Opacity(
-                                          opacity: read ? 0.5 : 1.0,
-                                          child: titleText,
-                                        ),
-                                        subtitle: ch.date != null
-                                            ? Opacity(
-                                                opacity: read ? 0.5 : 1.0,
-                                                child: Text(
-                                                  ch.date!,
-                                                  style: const TextStyle(
-                                                    color:
-                                                        AppColors.textTertiary,
-                                                    fontSize: 11,
-                                                  ),
+                                      // In select mode, the leading slot
+                                      // swaps from the chapter thumbnail
+                                      // to a checkbox so the row's
+                                      // selectable state reads at a
+                                      // glance. Outside select mode the
+                                      // original thumbnail returns.
+                                      final Widget leading = _selectMode
+                                          ? SizedBox(
+                                              width: 48,
+                                              height: 64,
+                                              child: Center(
+                                                child: Checkbox(
+                                                  value: selected,
+                                                  onChanged: (_) =>
+                                                      _toggleSelected(ch),
+                                                  visualDensity:
+                                                      VisualDensity.compact,
+                                                  materialTapTargetSize:
+                                                      MaterialTapTargetSize
+                                                          .shrinkWrap,
+                                                  activeColor:
+                                                      AppColors.primary,
                                                 ),
-                                              )
-                                            : null,
-                                        trailing: Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.end,
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            if (i == lastChapterIndex)
-                                              const Padding(
-                                                padding: EdgeInsets.only(
-                                                    right: 4),
-                                                child: Icon(
-                                                    Icons.play_circle,
-                                                    color: AppColors.primary,
-                                                    size: 18),
                                               ),
-                                            _ChapterBookmarkButton(
-                                                book: book, chapter: ch),
-                                            _ChapterDownloadButton(
-                                                book: book, chapter: ch),
-                                          ],
+                                            )
+                                          : Opacity(
+                                              opacity: read ? 0.5 : 1.0,
+                                              child: _ChapterThumbnail(
+                                                // `url: null` triggers
+                                                // the widget's own
+                                                // self-watch against the
+                                                // repo for THIS
+                                                // chapterId only.
+                                                url: null,
+                                                fallbackUrl: book.cover,
+                                                sourceId: book.sourceId,
+                                                bookId: book.id,
+                                                chapter: ch,
+                                              ),
+                                            );
+                                      return Container(
+                                        color: selected
+                                            ? AppColors.primary
+                                                .withValues(alpha: 0.15)
+                                            : Colors.transparent,
+                                        child: ListTile(
+                                          dense: true,
+                                          contentPadding:
+                                              const EdgeInsets.symmetric(
+                                                  vertical: 4, horizontal: 16),
+                                          onTap: _selectMode
+                                              ? () => _toggleSelected(ch)
+                                              : () => onOpenChapter(i),
+                                          onLongPress: _selectMode
+                                              ? null
+                                              : () => _enterSelectMode(ch),
+                                          leading: leading,
+                                          title: Opacity(
+                                            opacity: read ? 0.5 : 1.0,
+                                            child: titleText,
+                                          ),
+                                          subtitle: ch.date != null
+                                              ? Opacity(
+                                                  opacity: read ? 0.5 : 1.0,
+                                                  child: Text(
+                                                    ch.date!,
+                                                    style: const TextStyle(
+                                                      color: AppColors
+                                                          .textTertiary,
+                                                      fontSize: 11,
+                                                    ),
+                                                  ),
+                                                )
+                                              : null,
+                                          // Trailing controls clutter the
+                                          // row during multi-select, so
+                                          // hide everything there until
+                                          // the user exits select mode.
+                                          trailing: _selectMode
+                                              ? null
+                                              : Row(
+                                                  mainAxisAlignment:
+                                                      MainAxisAlignment.end,
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    if (i == lastChapterIndex)
+                                                      const Padding(
+                                                        padding:
+                                                            EdgeInsets.only(
+                                                                right: 4),
+                                                        child: Icon(
+                                                            Icons.play_circle,
+                                                            color: AppColors
+                                                                .primary,
+                                                            size: 18),
+                                                      ),
+                                                    _ChapterBookmarkButton(
+                                                        book: book,
+                                                        chapter: ch),
+                                                    _ChapterRowMenu(
+                                                        book: book,
+                                                        chapter: ch),
+                                                  ],
+                                                ),
                                         ),
                                       );
                                     },
@@ -695,6 +882,25 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
           ),
         ],
       ),
+      ),
+          ),
+          // Bottom contextual action bar — only present while
+          // multi-select is active. Sits above the system bottom
+          // padding so it doesn't get clipped by gesture insets.
+          if (_selectMode)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: _MultiSelectActionBar(
+                count: _selectedChapterIds.length,
+                onDownload: () => _downloadSelected(book),
+                onMarkRead: () => _markSelected(book, read: true),
+                onMarkUnread: () => _markSelected(book, read: false),
+                onClose: _exitSelectMode,
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -1470,13 +1676,23 @@ class _SkeletonDetail extends StatelessWidget {
   }
 }
 
-class _ChapterDownloadButton extends StatelessWidget {
-  const _ChapterDownloadButton({required this.book, required this.chapter});
+/// Per-chapter overflow menu — replaces the old dedicated download
+/// button. Hosts both read/unread toggling and the full download
+/// lifecycle (start / pause / resume / retry / cancel / re-download /
+/// delete) behind a single horizontal 3-dot trigger to keep the row
+/// trailing area uncluttered.
+///
+/// A small status indicator (spinner / pause / check / error) renders
+/// next to the trigger when there's an active or completed download so
+/// users still get an at-a-glance read on chapter state without
+/// opening the menu.
+class _ChapterRowMenu extends StatelessWidget {
+  const _ChapterRowMenu({required this.book, required this.chapter});
 
   final BookDetail book;
   final Chapter chapter;
 
-  Future<void> _start(BuildContext context) async {
+  Future<void> _startDownload(BuildContext context) async {
     final repo = sl<DownloadsRepository>();
     final providerRepo = sl<ProviderRepository>();
     final dio = sl<Dio>();
@@ -1536,7 +1752,7 @@ class _ChapterDownloadButton extends StatelessWidget {
     );
   }
 
-  Future<void> _confirmDelete(BuildContext context) async {
+  Future<void> _delete(BuildContext context) async {
     final repo = sl<DownloadsRepository>();
     await repo.delete(book.sourceId, book.id, chapter.id);
     if (!context.mounted) return;
@@ -1554,104 +1770,196 @@ class _ChapterDownloadButton extends StatelessWidget {
     );
   }
 
-  Future<void> _doneMenu(BuildContext context) async {
-    final accent = Theme.of(context).colorScheme.primary;
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: Icon(Icons.delete_outline, color: accent),
-              title: const Text('Delete download'),
-              onTap: () => Navigator.pop(ctx, 'delete'),
+  PopupMenuItem<String> _item(
+    String value, {
+    required IconData icon,
+    required String label,
+  }) {
+    return PopupMenuItem<String>(
+      value: value,
+      height: 40,
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: AppColors.textSecondary),
+          const SizedBox(width: 12),
+          Text(
+            label,
+            style: const TextStyle(
+              color: AppColors.textPrimary,
+              fontSize: 14,
             ),
-            ListTile(
-              leading: Icon(Icons.refresh, color: accent),
-              title: const Text('Re-download'),
-              onTap: () => Navigator.pop(ctx, 'redownload'),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
-    if (!context.mounted) return;
-    if (action == 'delete') {
-      await _confirmDelete(context);
-    } else if (action == 'redownload') {
-      await _confirmDelete(context);
-      if (!context.mounted) return;
-      await _start(context);
-    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final repo = sl<DownloadsRepository>();
+    final downloads = sl<DownloadsRepository>();
+    final reads = sl<ReadChaptersRepository>();
     final accent = Theme.of(context).colorScheme.primary;
 
     return StreamBuilder<DownloadEntry>(
-      stream: repo.watch(book.sourceId, book.id, chapter.id),
+      stream: downloads.watch(book.sourceId, book.id, chapter.id),
       builder: (context, snap) {
-        final entry = snap.data ?? repo.get(book.sourceId, book.id, chapter.id);
-        final isDeleted = entry?.error == '__deleted__';
-        final effective = isDeleted ? null : entry;
+        return StreamBuilder<BoxEvent>(
+          stream: reads.watch(),
+          builder: (context, _) {
+            final entry =
+                snap.data ?? downloads.get(book.sourceId, book.id, chapter.id);
+            final isDeleted = entry?.error == '__deleted__';
+            final effective = isDeleted ? null : entry;
+            final status = effective?.status;
+            final isRead =
+                reads.isRead(book.sourceId, book.id, chapter.id);
 
-        if (effective == null) {
-          return IconButton(
-            tooltip: 'Download',
-            icon: const Icon(Icons.download_outlined,
-                color: AppColors.textTertiary, size: 20),
-            visualDensity: VisualDensity.compact,
-            onPressed: () => _start(context),
-          );
-        }
-        switch (effective.status) {
-          case DownloadStatus.queued:
-          case DownloadStatus.downloading:
-            final progress = effective.total == 0
-                ? null
-                : effective.completed / effective.total;
-            return GestureDetector(
-              onLongPress: () => _cancel(context),
-              onTap: () => ScaffoldMessenger.of(context).showAppSnack(
-                SnackBar(
-                  content: Text(
-                    'Downloading… ${effective.completed}/${effective.total}',
-                  ),
+            // Compact at-a-glance indicator next to the menu trigger so
+            // the chapter row still communicates download state without
+            // requiring the user to open the menu.
+            Widget? statusIcon;
+            if (status == DownloadStatus.queued ||
+                status == DownloadStatus.downloading) {
+              final progress = (effective!.total == 0)
+                  ? null
+                  : effective.completed / effective.total;
+              statusIcon = SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  value: progress,
+                  color: accent,
                 ),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(10),
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    value: progress,
-                    color: accent,
+              );
+            } else if (status == DownloadStatus.paused) {
+              statusIcon = const Icon(Icons.pause_circle_outline,
+                  color: AppColors.textSecondary, size: 18);
+            } else if (status == DownloadStatus.done) {
+              statusIcon = Icon(Icons.check_circle, color: accent, size: 18);
+            } else if (status == DownloadStatus.failed) {
+              statusIcon = const Icon(Icons.error_outline,
+                  color: AppColors.warning, size: 18);
+            }
+
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (statusIcon != null)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 2),
+                    child: statusIcon,
                   ),
+                PopupMenuButton<String>(
+                  tooltip: 'More',
+                  color: AppColors.card,
+                  padding: EdgeInsets.zero,
+                  icon: const Icon(
+                    Icons.more_horiz,
+                    color: AppColors.textTertiary,
+                    size: 20,
+                  ),
+                  onSelected: (value) async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    switch (value) {
+                      case 'mark_read':
+                        await reads.mark(
+                            book.sourceId, book.id, chapter.id);
+                        messenger.showAppSnack(
+                          const SnackBar(content: Text('Marked as read')),
+                        );
+                        break;
+                      case 'mark_unread':
+                        await reads.unmark(
+                            book.sourceId, book.id, chapter.id);
+                        messenger.showAppSnack(
+                          const SnackBar(content: Text('Marked as unread')),
+                        );
+                        break;
+                      case 'download':
+                      case 'retry':
+                        await _startDownload(context);
+                        break;
+                      case 'pause':
+                        await downloads.pause(
+                            book.sourceId, book.id, chapter.id);
+                        break;
+                      case 'resume':
+                        await downloads.resume(
+                            book.sourceId, book.id, chapter.id);
+                        break;
+                      case 'cancel':
+                        await _cancel(context);
+                        break;
+                      case 'delete':
+                        await _delete(context);
+                        break;
+                      case 'redownload':
+                        await _delete(context);
+                        if (!context.mounted) return;
+                        await _startDownload(context);
+                        break;
+                    }
+                  },
+                  itemBuilder: (ctx) {
+                    final items = <PopupMenuEntry<String>>[
+                      _item(
+                        isRead ? 'mark_unread' : 'mark_read',
+                        icon: isRead
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined,
+                        label: isRead ? 'Mark as unread' : 'Mark as read',
+                      ),
+                      const PopupMenuDivider(height: 1),
+                    ];
+                    if (status == null) {
+                      items.add(_item('download',
+                          icon: Icons.download_outlined,
+                          label: 'Download'));
+                    } else {
+                      switch (status) {
+                        case DownloadStatus.queued:
+                        case DownloadStatus.downloading:
+                          items.add(_item('pause',
+                              icon: Icons.pause_outlined,
+                              label: 'Pause'));
+                          items.add(_item('cancel',
+                              icon: Icons.close_rounded,
+                              label: 'Cancel'));
+                          break;
+                        // ignore: unreachable_switch_case
+                        case DownloadStatus.paused:
+                          items.add(_item('resume',
+                              icon: Icons.play_arrow_rounded,
+                              label: 'Resume'));
+                          items.add(_item('cancel',
+                              icon: Icons.close_rounded,
+                              label: 'Cancel'));
+                          break;
+                        case DownloadStatus.failed:
+                          items.add(_item('retry',
+                              icon: Icons.refresh, label: 'Retry'));
+                          items.add(_item('cancel',
+                              icon: Icons.close_rounded,
+                              label: 'Cancel'));
+                          break;
+                        case DownloadStatus.done:
+                          items.add(_item('redownload',
+                              icon: Icons.refresh,
+                              label: 'Re-download'));
+                          items.add(_item('delete',
+                              icon: Icons.delete_outline,
+                              label: 'Delete download'));
+                          break;
+                      }
+                    }
+                    return items;
+                  },
                 ),
-              ),
+              ],
             );
-          case DownloadStatus.done:
-            return GestureDetector(
-              onLongPress: () => _doneMenu(context),
-              child: Padding(
-                padding: const EdgeInsets.all(10),
-                child: Icon(Icons.check_circle, color: accent, size: 20),
-              ),
-            );
-          case DownloadStatus.failed:
-            return IconButton(
-              tooltip: 'Retry download',
-              icon: const Icon(Icons.error_outline,
-                  color: AppColors.warning, size: 20),
-              visualDensity: VisualDensity.compact,
-              onPressed: () => _start(context),
-            );
-        }
+          },
+        );
       },
     );
   }
@@ -1692,6 +2000,120 @@ class _ShimmerBlock extends StatelessWidget {
       );
     }
     return block;
+  }
+}
+
+/// Contextual action bar that slides in at the bottom of the detail
+/// screen while the user has chapters selected via long-press. Shows
+/// the running selection count + the two batch operations (download,
+/// mark read/unread) and an X to bail.
+class _MultiSelectActionBar extends StatelessWidget {
+  const _MultiSelectActionBar({
+    required this.count,
+    required this.onDownload,
+    required this.onMarkRead,
+    required this.onMarkUnread,
+    required this.onClose,
+  });
+
+  final int count;
+  final VoidCallback onDownload;
+  final VoidCallback onMarkRead;
+  final VoidCallback onMarkUnread;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = Theme.of(context).colorScheme.primary;
+    return SafeArea(
+      top: false,
+      child: Material(
+        color: AppColors.card,
+        elevation: 8,
+        child: Container(
+          decoration: const BoxDecoration(
+            border: Border(
+              top: BorderSide(
+                color: Color(0x33FFFFFF),
+                width: 0.5,
+              ),
+            ),
+          ),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              IconButton(
+                tooltip: 'Cancel',
+                icon: const Icon(Icons.close_rounded,
+                    color: AppColors.textPrimary),
+                onPressed: onClose,
+              ),
+              Expanded(
+                child: Text(
+                  '$count selected',
+                  style: const TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: count == 0 ? null : onDownload,
+                icon: Icon(Icons.download_rounded, color: accent, size: 18),
+                label: Text(
+                  'Download',
+                  style: TextStyle(
+                    color: accent,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              PopupMenuButton<String>(
+                tooltip: 'More',
+                icon: const Icon(
+                  Icons.more_vert_rounded,
+                  color: AppColors.textPrimary,
+                ),
+                onSelected: (v) {
+                  switch (v) {
+                    case 'read':
+                      onMarkRead();
+                      break;
+                    case 'unread':
+                      onMarkUnread();
+                      break;
+                  }
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem<String>(
+                    value: 'read',
+                    child: Row(
+                      children: [
+                        Icon(Icons.done_all_rounded, size: 18),
+                        SizedBox(width: 12),
+                        Text('Mark read'),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem<String>(
+                    value: 'unread',
+                    child: Row(
+                      children: [
+                        Icon(Icons.remove_done_rounded, size: 18),
+                        SizedBox(width: 12),
+                        Text('Mark unread'),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- INTERNET is required for ALL builds. Flutter's tooling only
          injects this permission into the DEBUG manifest (so hot reload
          works); release builds need it declared explicitly here or
@@ -17,6 +18,16 @@
          users don't have to open the app to "rearm" alerts. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Foreground service for in-progress downloads. The sticky
+         notification keeps Android from killing the process while the
+         worker pool fetches chapter pages. FOREGROUND_SERVICE is the
+         base permission (API 28+); FOREGROUND_SERVICE_DATA_SYNC is the
+         typed permission required on Android 14+ (API 34+) — we use
+         the `dataSync` foregroundServiceType because we're moving
+         chapter assets over the network. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application
         android:label="Sozo Read"
@@ -121,6 +132,22 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity-alias>
+
+        <!-- Foreground service registration for `flutter_background_service`.
+             The plugin already declares this service (with
+             `android:exported="true"`) inside its own manifest, so we
+             use `tools:replace="android:exported"` to override that to
+             `false` — nothing outside the app talks to this service.
+             `android:foregroundServiceType="dataSync"` is also added
+             here because Android 14+ requires every foreground
+             service to declare its type; the plugin's defaults
+             didn't include this for our use case (downloading
+             chapter pages). -->
+        <service
+            android:name="id.flutter.flutter_background_service.BackgroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false"
+            tools:replace="android:exported" />
 
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

@@ -17,6 +17,7 @@ import '../repository/provider_repository.dart';
 import '../repository/read_chapters_repository.dart';
 import '../repository/tracker_repository.dart';
 import '../services/chapter_check_service.dart';
+import '../services/download_notification_service.dart';
 import '../trackers/anilist/anilist_api.dart';
 import '../trackers/anilist/anilist_auth.dart';
 import '../trackers/anilist/anilist_tracker.dart';
@@ -108,6 +109,16 @@ Future<void> configureDependencies() async {
     () => NotificationsPrefsCubit(),
   );
   sl.registerLazySingleton<NotificationService>(() => NotificationService());
+  // Persistent download-progress notification. Subscribes to the
+  // downloads Hive box on `start()` (called from AppBootstrap) and
+  // renders one throttled, replace-in-place notification summarising
+  // the active queue.
+  sl.registerLazySingleton<DownloadNotificationService>(
+    () => DownloadNotificationService(
+      downloads: sl(),
+      notifications: sl(),
+    ),
+  );
   sl.registerLazySingleton<ChapterCheckService>(
     () => ChapterCheckService(
       library: sl(),

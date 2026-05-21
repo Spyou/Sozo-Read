@@ -44,6 +44,11 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
   static const String _kAutoScrollSpeed = 'manga.auto_scroll_speed';
   static const String _kShowFloatingAutoScroll =
       'manga.show_floating_auto_scroll';
+  // Downloads scope. Lives on this cubit rather than its own so we don't
+  // have to wire a new BlocProvider into the settings screen — the key
+  // is read directly out of the same Hive `settings` box by
+  // DownloadsRepository.
+  static const String _kDownloadsWifiOnly = 'downloads.wifi_only';
 
   static const MangaReadingDirection defaultDirection =
       MangaReadingDirection.vertical;
@@ -60,6 +65,7 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
   /// Maps to ~15-300 px/sec in [MangaReaderBloc._applyAutoScroll].
   static const double defaultAutoScrollSpeed = 0.33;
   static const bool defaultShowFloatingAutoScroll = true;
+  static const bool defaultDownloadsWifiOnly = false;
 
   static Box get _box => Hive.box(_boxName);
 
@@ -81,6 +87,8 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
       showFloatingAutoScroll:
           (_box.get(_kShowFloatingAutoScroll) as bool?) ??
               defaultShowFloatingAutoScroll,
+      downloadsWifiOnly:
+          (_box.get(_kDownloadsWifiOnly) as bool?) ?? defaultDownloadsWifiOnly,
     );
   }
 
@@ -196,6 +204,16 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
     _box.put(_kShowFloatingAutoScroll, v);
     emit(state.copyWith(showFloatingAutoScroll: v));
   }
+
+  /// Toggle the "WiFi only" gate for the downloads worker pool. Read by
+  /// [DownloadsRepository] before picking up a job — when on and the
+  /// current link is not WiFi, the job is flipped to `paused` with a
+  /// "Waiting for WiFi" note.
+  void setDownloadsWifiOnly(bool v) {
+    if (v == state.downloadsWifiOnly) return;
+    _box.put(_kDownloadsWifiOnly, v);
+    emit(state.copyWith(downloadsWifiOnly: v));
+  }
 }
 
 class MangaPrefs extends Equatable {
@@ -211,6 +229,7 @@ class MangaPrefs extends Equatable {
     this.autoScrollSpeed = MangaPrefsCubit.defaultAutoScrollSpeed,
     this.showFloatingAutoScroll =
         MangaPrefsCubit.defaultShowFloatingAutoScroll,
+    this.downloadsWifiOnly = MangaPrefsCubit.defaultDownloadsWifiOnly,
   });
 
   final MangaReadingDirection readingDirection;
@@ -232,6 +251,12 @@ class MangaPrefs extends Equatable {
   /// auto-scroll is enabled. Default true.
   final bool showFloatingAutoScroll;
 
+  /// When true, the downloads worker pool refuses to start a chapter
+  /// transfer unless the current network link is WiFi. Jobs picked up
+  /// off-WiFi flip to `paused` with a "Waiting for WiFi" note and resume
+  /// automatically when the link comes back. Default false.
+  final bool downloadsWifiOnly;
+
   MangaPrefs copyWith({
     MangaReadingDirection? readingDirection,
     bool? cropEdges,
@@ -243,6 +268,7 @@ class MangaPrefs extends Equatable {
     bool? tapZoneNavigation,
     double? autoScrollSpeed,
     bool? showFloatingAutoScroll,
+    bool? downloadsWifiOnly,
   }) =>
       MangaPrefs(
         readingDirection: readingDirection ?? this.readingDirection,
@@ -256,6 +282,7 @@ class MangaPrefs extends Equatable {
         autoScrollSpeed: autoScrollSpeed ?? this.autoScrollSpeed,
         showFloatingAutoScroll:
             showFloatingAutoScroll ?? this.showFloatingAutoScroll,
+        downloadsWifiOnly: downloadsWifiOnly ?? this.downloadsWifiOnly,
       );
 
   @override
@@ -270,5 +297,6 @@ class MangaPrefs extends Equatable {
         tapZoneNavigation,
         autoScrollSpeed,
         showFloatingAutoScroll,
+        downloadsWifiOnly,
       ];
 }

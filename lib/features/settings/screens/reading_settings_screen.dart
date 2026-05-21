@@ -124,6 +124,28 @@ class ReadingSettingsScreen extends StatelessWidget {
                     ],
                   ),
                 ),
+                const SettingsSectionLabel('Downloads'),
+                BlocBuilder<MangaPrefsCubit, MangaPrefs>(
+                  builder: (context, m) => SettingsCard(
+                    children: [
+                      SettingsTile(
+                        icon: Icons.wifi_rounded,
+                        title: 'WiFi only',
+                        subtitle:
+                            'Pause downloads when not on WiFi',
+                        trailing: Switch.adaptive(
+                          value: m.downloadsWifiOnly,
+                          onChanged: (v) => context
+                              .read<MangaPrefsCubit>()
+                              .setDownloadsWifiOnly(v),
+                        ),
+                        onTap: () => context
+                            .read<MangaPrefsCubit>()
+                            .setDownloadsWifiOnly(!m.downloadsWifiOnly),
+                      ),
+                    ],
+                  ),
+                ),
                 const SettingsSectionLabel('Novel'),
                 SettingsCard(
                   children: [

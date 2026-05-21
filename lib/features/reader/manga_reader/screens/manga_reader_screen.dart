@@ -2019,6 +2019,10 @@ class _DownloadMenuRow extends StatelessWidget {
           DownloadStatus.queued ||
           DownloadStatus.downloading =>
             (Icons.cloud_download_outlined, 'Downloading…'),
+          // Paused: render as a tap-to-resume target. Agent A will refine
+          // the UX; this just keeps the menu compiling + functional.
+          DownloadStatus.paused =>
+            (Icons.pause_circle_outline, 'Paused — tap to resume'),
           DownloadStatus.done => (Icons.check_circle, 'Downloaded'),
           DownloadStatus.failed => (Icons.error_outline, 'Retry download'),
         };
@@ -2099,6 +2103,15 @@ class _ReaderDownloadButton extends StatelessWidget {
               tooltip: 'Downloading',
               icon: Icon(Icons.cloud_download_outlined, color: Colors.white),
               onPressed: null,
+            );
+          // Paused entries get a resume tap target. Agent A will replace
+          // this with a richer pause/resume affordance later.
+          case DownloadStatus.paused:
+            return IconButton(
+              tooltip: 'Resume download',
+              icon: const Icon(Icons.play_circle_outline, color: Colors.white),
+              onPressed: () => sl<DownloadsRepository>()
+                  .resume(book.sourceId, book.id, chapter.id),
             );
           case DownloadStatus.done:
             return const IconButton(
