@@ -508,6 +508,71 @@ class _RepoSectionState extends State<_RepoSection> {
     }
   }
 
+  Future<void> _rename(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final ctrl = TextEditingController(text: repo.customName ?? '');
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text('Rename repo'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              textCapitalization: TextCapitalization.words,
+              decoration: InputDecoration(
+                labelText: 'Display name',
+                hintText: repo.name,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Leave blank to restore the original name.',
+              style: TextStyle(
+                color: AppColors.textTertiary,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: AppColors.textPrimary,
+            ),
+            // Pop the trimmed text — empty string clears the override.
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => ctrl.dispose());
+    if (result == null) return; // Cancel
+    await sl<ProviderReposRegistry>()
+        .setCustomName(repo.url, result.isEmpty ? null : result);
+    if (!mounted) return;
+    final updated = sl<ProviderReposRegistry>().get(repo.url);
+    messenger.showAppSnack(
+      SnackBar(
+        content: Text(
+          result.isEmpty
+              ? 'Restored original name'
+              : 'Renamed to ${updated?.displayName ?? result}',
+        ),
+      ),
+    );
+  }
+
   Future<void> _remove(BuildContext context) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -515,7 +580,7 @@ class _RepoSectionState extends State<_RepoSection> {
         backgroundColor: AppColors.surface,
         title: const Text('Remove repo?'),
         content: Text(
-          'Already-installed sources from "${repo.name}" stay installed. '
+          'Already-installed sources from "${repo.displayName}" stay installed. '
           'You can remove this repo and add it back later.',
         ),
         actions: [
@@ -538,7 +603,7 @@ class _RepoSectionState extends State<_RepoSection> {
     final messenger = ScaffoldMessenger.of(context);
     await sl<ProviderReposRegistry>().remove(repo.url);
     messenger.showAppSnack(
-      SnackBar(content: Text('Removed ${repo.name}')),
+      SnackBar(content: Text('Removed ${repo.displayName}')),
     );
   }
 
@@ -592,7 +657,7 @@ class _RepoSectionState extends State<_RepoSection> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          repo.name,
+                          repo.displayName,
                           style: const TextStyle(
                             color: AppColors.textPrimary,
                             fontSize: 15,
@@ -638,9 +703,12 @@ class _RepoSectionState extends State<_RepoSection> {
                       color: AppColors.textSecondary,
                     ),
                     onSelected: (v) {
+                      if (v == 'rename') _rename(context);
                       if (v == 'remove') _remove(context);
                     },
                     itemBuilder: (_) => const [
+                      PopupMenuItem(
+                          value: 'rename', child: Text('Rename')),
                       PopupMenuItem(
                           value: 'remove', child: Text('Remove repo')),
                     ],
@@ -970,12 +1038,14 @@ class _AddRepoDialog extends StatefulWidget {
 
 class _AddRepoDialogState extends State<_AddRepoDialog> {
   final _urlCtrl = TextEditingController();
+  final _nameCtrl = TextEditingController();
   bool _loading = false;
   String? _error;
 
   @override
   void dispose() {
     _urlCtrl.dispose();
+    _nameCtrl.dispose();
     super.dispose();
   }
 
@@ -991,11 +1061,15 @@ class _AddRepoDialogState extends State<_AddRepoDialog> {
     });
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final repo = await sl<ProviderReposRegistry>().fetchAndCache(url);
+      final name = _nameCtrl.text.trim();
+      final repo = await sl<ProviderReposRegistry>().fetchAndCache(
+        url,
+        customName: name.isEmpty ? null : name,
+      );
       if (!mounted) return;
       Navigator.of(context).pop();
       messenger.showAppSnack(
-        SnackBar(content: Text('Added ${repo.name}')),
+        SnackBar(content: Text('Added ${repo.displayName}')),
       );
     } on ProviderRepoException catch (e) {
       if (!mounted) return;
@@ -1021,6 +1095,20 @@ class _AddRepoDialogState extends State<_AddRepoDialog> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // Optional override for the repo's display name. Skipped →
+          // manifest's own "name" field is used. Useful when the user
+          // has several similarly-named third-party repos and wants
+          // their own labels.
+          TextField(
+            controller: _nameCtrl,
+            enabled: !_loading,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(
+              labelText: 'Custom name (optional)',
+              hintText: "Leave blank to use the repo's own name",
+            ),
+          ),
+          const SizedBox(height: 12),
           TextField(
             controller: _urlCtrl,
             enabled: !_loading,

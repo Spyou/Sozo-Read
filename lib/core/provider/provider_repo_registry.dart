@@ -67,14 +67,31 @@ class ProviderRepo {
     required this.description,
     required this.sources,
     required this.lastSyncedAt,
+    this.customName,
   });
 
   /// Manifest URL — `https://.../index.json` style.
   final String url;
+
+  /// Display name straight from the manifest. Use [displayName] in UI
+  /// — it falls back to this when no [customName] override is set.
   final String name;
   final String description;
   final List<RepoSource> sources;
   final DateTime lastSyncedAt;
+
+  /// User-set local override for [name]. When non-null and non-empty,
+  /// it wins everywhere the repo's name appears in the UI. Persisted
+  /// alongside the cached manifest; survives `fetchAndCache` refreshes
+  /// so manifest pulls don't clobber a user's rename.
+  final String? customName;
+
+  /// What to render in the UI. Override beats manifest name.
+  String get displayName {
+    final c = customName?.trim();
+    if (c != null && c.isNotEmpty) return c;
+    return name;
+  }
 
   Map<String, dynamic> toJson() => {
         'url': url,
@@ -82,6 +99,7 @@ class ProviderRepo {
         'description': description,
         'sources': sources.map((s) => s.toJson()).toList(),
         'lastSyncedAt': lastSyncedAt.toIso8601String(),
+        if (customName != null) 'customName': customName,
       };
 
   factory ProviderRepo.fromJson(Map<String, dynamic> j) => ProviderRepo(
@@ -94,6 +112,9 @@ class ProviderRepo {
             .toList(),
         lastSyncedAt: DateTime.tryParse(j['lastSyncedAt'] as String? ?? '') ??
             DateTime.fromMillisecondsSinceEpoch(0),
+        customName: (j['customName'] as String?)?.trim().isNotEmpty == true
+            ? (j['customName'] as String).trim()
+            : null,
       );
 }
 
@@ -157,11 +178,22 @@ class ProviderReposRegistry {
   /// Fetches the manifest at [url], parses it, persists it. Throws
   /// [ProviderRepoException] on HTTP / parse failure so the UI can show
   /// a meaningful error.
-  Future<ProviderRepo> fetchAndCache(String url) async {
+  ///
+  /// [customName] is used only on first-time fetches — refreshes
+  /// preserve the existing override (if any) so manifest pulls don't
+  /// clobber a user's rename.
+  Future<ProviderRepo> fetchAndCache(String url, {String? customName}) async {
     final trimmed = url.trim();
     if (trimmed.isEmpty) {
       throw ProviderRepoException('Repo URL is empty');
     }
+    // Preserve any existing customName across refreshes; only the explicit
+    // [customName] argument (passed at first-add or via setCustomName)
+    // can change it.
+    final existing = get(trimmed);
+    final resolvedCustomName = customName?.trim().isNotEmpty == true
+        ? customName!.trim()
+        : existing?.customName;
     try {
       final response = await dio.get<String>(
         trimmed,
@@ -180,6 +212,7 @@ class ProviderReposRegistry {
             .whereType<Map<String, dynamic>>()
             .map(RepoSource.fromJson)
             .toList(),
+        customName: resolvedCustomName,
         lastSyncedAt: DateTime.now(),
       );
       await _box.put(trimmed, repo.toJson());
@@ -198,6 +231,26 @@ class ProviderReposRegistry {
   /// until they manually remove them.
   Future<void> remove(String url) async {
     await _box.delete(url);
+  }
+
+  /// Sets (or clears) the user's display-name override for [url].
+  /// Pass an empty/whitespace string to clear and revert to the
+  /// manifest's own name.
+  Future<void> setCustomName(String url, String? name) async {
+    final existing = get(url);
+    if (existing == null) return;
+    final trimmed = name?.trim();
+    final resolved =
+        (trimmed != null && trimmed.isNotEmpty) ? trimmed : null;
+    final updated = ProviderRepo(
+      url: existing.url,
+      name: existing.name,
+      description: existing.description,
+      sources: existing.sources,
+      lastSyncedAt: existing.lastSyncedAt,
+      customName: resolved,
+    );
+    await _box.put(url, updated.toJson());
   }
 
   /// Resolves a [RepoSource]'s relative `file` into a full URL by
