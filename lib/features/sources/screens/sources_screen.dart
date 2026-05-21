@@ -720,6 +720,21 @@ class _SourceRow extends StatelessWidget {
     );
   }
 
+  /// Force-refreshes the source — `SourceUpdated` routes through
+  /// `ProviderRegistry.loadIntoRuntime(name, force: true)`, which
+  /// tells the downloader to bypass its cache and pull the latest
+  /// `.js` for this provider. Bundled providers (URL `bundled://`)
+  /// re-read from the asset bundle via the special-case in
+  /// [ProviderRegistry.loadIntoRuntime]. The runtime reloads with the
+  /// new code so the user sees the update without restarting.
+  Future<void> _update(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    context.read<SourcesBloc>().add(SourceUpdated(source.id));
+    messenger.showAppSnack(
+      SnackBar(content: Text('Updating ${source.name}…')),
+    );
+  }
+
   Future<void> _uninstall(BuildContext context) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -785,13 +800,61 @@ class _SourceRow extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           installed
-              ? TextButton(
-                  onPressed: () => _uninstall(context),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.textSecondary,
-                    minimumSize: const Size(88, 36),
+              // When installed, the pill becomes a popup menu — Update
+              // (re-fetches the .js for the source so users get
+              // version bumps without having to remove+reinstall) and
+              // Uninstall.
+              ? PopupMenuButton<String>(
+                  tooltip: 'Manage',
+                  color: AppColors.surface,
+                  onSelected: (v) {
+                    if (v == 'update') _update(context);
+                    if (v == 'uninstall') _uninstall(context);
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(
+                      value: 'update',
+                      child: Row(
+                        children: [
+                          Icon(Icons.refresh_rounded, size: 18),
+                          SizedBox(width: 12),
+                          Text('Update'),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'uninstall',
+                      child: Row(
+                        children: [
+                          Icon(Icons.delete_outline_rounded,
+                              size: 18, color: AppColors.primary),
+                          SizedBox(width: 12),
+                          Text('Uninstall',
+                              style: TextStyle(color: AppColors.primary)),
+                        ],
+                      ),
+                    ),
+                  ],
+                  child: Container(
+                    constraints: const BoxConstraints(minWidth: 88, minHeight: 36),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                        color: AppColors.textSecondary.withValues(alpha: 0.4),
+                      ),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Text(
+                      'Installed',
+                      style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
-                  child: const Text('Installed'),
                 )
               : ElevatedButton(
                   onPressed: () => _install(context),

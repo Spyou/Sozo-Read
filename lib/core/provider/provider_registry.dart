@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:hive/hive.dart';
 
@@ -122,11 +123,25 @@ class ProviderRegistry {
   }
 
   /// Downloads (if needed) and loads a provider into the runtime.
+  ///
+  /// Bundled providers — those that were registered via
+  /// [installFromBundled] (URL prefix `bundled://`) — are reloaded from
+  /// the asset bundle instead of HTTP. Otherwise an Update for a
+  /// bundled source would try to GET `bundled://weebcentral` and fail.
   Future<void> loadIntoRuntime(String name, {bool force = false}) async {
     final raw = _box.get(name);
     if (raw == null) throw ProviderException('Provider not installed: $name');
     final entry = ProviderRegistryEntry.fromJson(Map<String, dynamic>.from(raw));
     if (!entry.enabled) return;
+    if (entry.url.startsWith('bundled://')) {
+      try {
+        final js = await rootBundle.loadString('providers/$name.js');
+        await _manager.load(sourceId: entry.name, jsSource: js);
+        return;
+      } catch (e) {
+        throw ProviderException('Bundled provider $name missing from assets: $e');
+      }
+    }
     final cached = await _downloader.fetch(name: entry.name, url: entry.url, force: force);
     await _manager.load(sourceId: entry.name, jsSource: cached.jsCode);
   }
