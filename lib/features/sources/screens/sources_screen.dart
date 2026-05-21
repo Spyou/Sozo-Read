@@ -1032,6 +1032,41 @@ class _AddRepoDialogState extends State<_AddRepoDialog> {
                   'https://raw.githubusercontent.com/user/repo/main/index.json',
             ),
           ),
+          const SizedBox(height: 10),
+          // Explainer for the common "I pasted a .js URL and only got
+          // one source" confusion. The manifest IS the list of every
+          // source in the repo — paste the index.json, not a single
+          // provider file.
+          Container(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+            decoration: BoxDecoration(
+              color: AppColors.card,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.info_outline_rounded,
+                  size: 16,
+                  color: AppColors.textSecondary,
+                ),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Paste the manifest URL (the JSON file that lists every '
+                    'source in the repo) — not a single provider .js URL. '
+                    'One manifest = many sources.',
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 11,
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
           if (_error != null) ...[
             const SizedBox(height: 8),
             Text(
