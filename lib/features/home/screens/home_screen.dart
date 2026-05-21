@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'dart:ui';
 
@@ -10,6 +11,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import '../../../core/di/injection.dart';
 import '../../../core/models/book_item.dart';
 import '../../../core/repository/library_repository.dart';
+import '../../../core/repository/notifications_repository.dart';
 import '../../../core/state/active_source_cubit.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/source_picker.dart';
@@ -54,6 +56,43 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
+/// Picks a random book from whatever the Home bloc currently has loaded
+/// (featured + section grids) and pushes its detail screen.
+///
+/// Exposed as a top-level helper so it can be invoked from elsewhere
+/// (e.g. the Search screen's empty state). The Search button uses the
+/// same pool the Home screen would for consistency.
+///
+/// Does NOT trigger a network fetch — if no content has loaded yet,
+/// the user gets a brief snackbar telling them to wait a moment.
+void pickRandomFromHome(BuildContext context) {
+  final state = sl<HomeBloc>().state;
+  final pool = <String, BookItem>{};
+  for (final b in state.featured) {
+    pool[b.id] = b;
+  }
+  for (final s in state.sections) {
+    for (final b in s.books) {
+      pool[b.id] = b;
+    }
+  }
+  if (pool.isEmpty) {
+    ScaffoldMessenger.of(context).showAppSnack(
+      const SnackBar(
+        content: Text('Loading content — try again in a moment'),
+      ),
+    );
+    return;
+  }
+  final list = pool.values.toList();
+  final pick = list[Random().nextInt(list.length)];
+  context.pushNamed(
+    'detail',
+    pathParameters: {'sourceId': pick.sourceId, 'bookId': pick.id},
+    extra: pick,
+  );
+}
+
 class _HomeView extends StatefulWidget {
   const _HomeView();
   @override
@@ -83,30 +122,6 @@ class _HomeViewState extends State<_HomeView> {
     );
   }
 
-  /// Picks a random book from currently-loaded HomeBloc state. We intentionally
-  /// do NOT trigger a network fetch — if nothing is loaded yet we just nudge
-  /// the user with a SnackBar.
-  void _openRandom(BuildContext context) {
-    final state = context.read<HomeBloc>().state;
-    final pool = <String, BookItem>{};
-    for (final b in state.featured) {
-      pool[b.id] = b;
-    }
-    for (final s in state.sections) {
-      for (final b in s.books) {
-        pool[b.id] = b;
-      }
-    }
-    if (pool.isEmpty) {
-      ScaffoldMessenger.of(context).showAppSnack(
-        const SnackBar(content: Text('Loading content — try again in a moment')),
-      );
-      return;
-    }
-    final list = pool.values.toList();
-    final pick = list[Random().nextInt(list.length)];
-    _openDetail(context, pick);
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -196,7 +211,6 @@ class _HomeViewState extends State<_HomeView> {
                   child: _GlassHeader(
                     scrolled: _scrolled,
                     onPickSource: () => showSourcePicker(context),
-                    onRandom: () => _openRandom(context),
                   ),
                 ),
               ],
@@ -215,11 +229,9 @@ class _GlassHeader extends StatelessWidget {
   const _GlassHeader({
     required this.scrolled,
     required this.onPickSource,
-    required this.onRandom,
   });
   final bool scrolled;
   final VoidCallback onPickSource;
-  final VoidCallback onRandom;
 
   @override
   Widget build(BuildContext context) {
@@ -257,13 +269,13 @@ class _GlassHeader extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
               child: Row(
                 children: [
-                  const _BrandTitle(),
-                  const Spacer(),
-                  IconButton(
-                    icon: const Icon(Icons.casino_rounded, color: Colors.white),
-                    tooltip: 'Random manga',
-                    onPressed: onRandom,
-                  ),
+                  // Brand shrinks first when the bell + swap icons take
+                  // up most of the row on narrow screens. Without
+                  // `Flexible` the brand insists on its natural width
+                  // and the row overflows.
+                  const Flexible(child: _BrandTitle()),
+                  const SizedBox(width: 8),
+                  const _NotificationsBell(),
                   IconButton(
                     icon: const Icon(Icons.swap_horiz_rounded, color: Colors.white),
                     tooltip: 'Change source',
@@ -275,6 +287,69 @@ class _GlassHeader extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Bell icon for the Home header — opens `/notifications`. Shows a small
+/// red dot in the corner when there are unread notifications. Subscribes
+/// to the notifications Hive box so the badge clears live the moment
+/// the user opens the inbox.
+class _NotificationsBell extends StatefulWidget {
+  const _NotificationsBell();
+
+  @override
+  State<_NotificationsBell> createState() => _NotificationsBellState();
+}
+
+class _NotificationsBellState extends State<_NotificationsBell> {
+  StreamSubscription<BoxEvent>? _sub;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = sl<NotificationsRepository>().watch().listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final unread = sl<NotificationsRepository>().unreadCount;
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        IconButton(
+          tooltip: 'Notifications',
+          icon: const Icon(
+            Icons.notifications_none_rounded,
+            color: Colors.white,
+          ),
+          onPressed: () => context.pushNamed('notifications'),
+        ),
+        if (unread > 0)
+          Positioned(
+            top: 10,
+            right: 10,
+            child: IgnorePointer(
+              child: Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: AppColors.primary,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 1.2),
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -304,18 +379,26 @@ class _BrandTitle extends StatelessWidget {
           ),
           if (state.sourceId != null) ...[
             const SizedBox(width: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: AppColors.card,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                state.sourceId!,
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textSecondary,
+            // Pill shrinks + ellipsizes when the parent Row runs out of
+            // room (longer source ids would otherwise force the brand
+            // wider than the screen).
+            Flexible(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.card,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  state.sourceId!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textSecondary,
+                  ),
                 ),
               ),
             ),

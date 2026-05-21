@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../repository/library_repository.dart';
+import '../repository/notifications_repository.dart';
 import '../repository/provider_repository.dart';
 import '../state/notifications_prefs_cubit.dart';
 import 'notification_service.dart';
@@ -28,13 +29,16 @@ class ChapterCheckService {
     required LibraryRepository library,
     required ProviderRepository providers,
     required NotificationService notifications,
+    required NotificationsRepository inbox,
   })  : _library = library,
         _providers = providers,
-        _notifications = notifications;
+        _notifications = notifications,
+        _inbox = inbox;
 
   final LibraryRepository _library;
   final ProviderRepository _providers;
   final NotificationService _notifications;
+  final NotificationsRepository _inbox;
 
   /// Iterates every saved book, asks its source for the latest chapter
   /// list, fires a notification when the count has grown, then
@@ -91,6 +95,19 @@ class ChapterCheckService {
               await _notifications.showNewChapters(
                 book: book,
                 newCount: delta,
+              );
+              // Persist a row in the local inbox so the user can still
+              // see the event after dismissing the OS notification.
+              // ignore: discarded_futures
+              _inbox.add(
+                type: 'new_chapter',
+                title: book.title,
+                body: delta == 1
+                    ? 'New chapter available'
+                    : '$delta new chapters available',
+                sourceId: book.sourceId,
+                bookId: book.id,
+                coverUrl: book.cover,
               );
               notified++;
               await _library.updateLastSeenChapterCount(

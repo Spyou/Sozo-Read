@@ -11,6 +11,7 @@ import '../repository/chapter_bookmarks_repository.dart';
 import '../repository/chapter_thumbnails_repository.dart';
 import '../repository/downloads_repository.dart';
 import '../repository/library_repository.dart';
+import '../repository/notifications_repository.dart';
 import '../repository/page_bookmarks_repository.dart';
 import '../repository/provider_repository.dart';
 import '../repository/read_chapters_repository.dart';
@@ -78,6 +79,9 @@ Future<void> configureDependencies() async {
   sl.registerLazySingleton<ChapterThumbnailsRepository>(
     () => ChapterThumbnailsRepository(),
   );
+  sl.registerLazySingleton<NotificationsRepository>(
+    () => NotificationsRepository(),
+  );
   sl.registerLazySingleton<BookDetailCache>(() => BookDetailCache());
   sl.registerLazySingleton<ActiveSourceCubit>(
     () => ActiveSourceCubit(repository: sl()),
@@ -109,6 +113,7 @@ Future<void> configureDependencies() async {
       library: sl(),
       providers: sl(),
       notifications: sl(),
+      inbox: sl(),
     ),
   );
   // HomeBloc as a singleton so the splash screen can warm it up while its

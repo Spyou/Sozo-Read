@@ -8,6 +8,7 @@ import '../../../core/repository/provider_repository.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/book_card.dart';
 import '../../../core/widgets/state_views.dart' show EmptyView, ErrorView;
+import '../../home/screens/home_screen.dart' show pickRandomFromHome;
 import '../bloc/search_bloc.dart';
 import '../bloc/search_event.dart';
 import '../bloc/search_state.dart';
@@ -175,7 +176,7 @@ class _SearchViewState extends State<_SearchView> {
             child: BlocBuilder<SearchBloc, SearchState>(
               builder: (context, state) {
                 if (state.status == SearchStatus.idle) {
-                  return const EmptyView(message: 'Type to search', icon: Icons.search);
+                  return const _SearchIdleView();
                 }
                 if (state.status == SearchStatus.error) {
                   return ErrorView(
@@ -212,6 +213,70 @@ class _SearchViewState extends State<_SearchView> {
 
 /// Shimmer placeholder grid shown while no source has returned results yet.
 /// Matches the result grid's geometry so the transition is seamless.
+/// Idle state — shown before the user has typed anything. Hosts the
+/// "Type to search" hint plus a Random pick button so users who don't
+/// know what to look for have a way to discover something.
+class _SearchIdleView extends StatelessWidget {
+  const _SearchIdleView();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.search,
+              size: 48,
+              color: AppColors.textTertiary,
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Type to search',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'or',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: AppColors.textTertiary,
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Random pick — pulls from whatever Home has currently
+            // loaded (featured carousel + section grids). Doesn't
+            // trigger a network fetch; users see a "try again in a
+            // moment" snackbar if Home isn't warm yet.
+            OutlinedButton.icon(
+              icon: const Icon(Icons.casino_rounded),
+              label: const Text('Random pick'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                side: BorderSide(
+                  color: AppColors.primary.withValues(alpha: 0.6),
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 10,
+                ),
+              ),
+              onPressed: () => pickRandomFromHome(context),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SearchShimmerGrid extends StatelessWidget {
   const _SearchShimmerGrid();
 

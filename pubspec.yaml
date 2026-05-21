@@ -94,15 +94,15 @@ dev_dependencies:
   flutter_launcher_icons: ^0.14.4
 
 flutter_launcher_icons:
+  # NOTE: launcher icons are currently managed externally via the
+  # EasyAppIcon package the designer ships. The Android mipmaps,
+  # adaptive XMLs, and iOS AppIcon.appiconset were copied directly
+  # from that bundle. Do NOT run `dart run flutter_launcher_icons` —
+  # it would overwrite the proper adaptive foreground / safe-zone
+  # work the designer did.
   android: "ic_launcher"
   ios: true
   image_path: "assets/branding/sozo_new_logo.png"
-  # Adaptive icon disabled. Using the new-logo PNG as the foreground left
-  # ~33% of the launcher mask as black padding because Android crops the
-  # outer safe-zone of adaptive foregrounds. The legacy bitmap fills the
-  # mask cleanly. Re-enable when we have a foreground specifically
-  # authored with safe-zone padding (logo at ~150% canvas size so it
-  # survives the inner-66% crop).
   min_sdk_android: 21
   remove_alpha_ios: true
 

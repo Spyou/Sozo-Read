@@ -12,6 +12,7 @@ import '../../features/genre_browse/screens/genre_browse_screen.dart';
 import '../../features/history/screens/history_screen.dart';
 import '../../features/home/screens/home_screen.dart';
 import '../../features/library/screens/library_screen.dart';
+import '../../features/notifications/screens/notifications_screen.dart';
 import '../../features/onboarding/screens/onboarding_screen.dart';
 import '../../features/profile/screens/profile_screen.dart';
 import '../../features/reader/manga_reader/screens/manga_reader_screen.dart';
@@ -179,6 +180,11 @@ GoRouter buildRouter() {
         path: '/bookmarks',
         name: 'bookmarks',
         builder: (_, _) => const BookmarksScreen(),
+      ),
+      GoRoute(
+        path: '/notifications',
+        name: 'notifications',
+        builder: (_, _) => const NotificationsScreen(),
       ),
       GoRoute(
         path: '/auth',
