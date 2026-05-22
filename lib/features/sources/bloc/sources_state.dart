@@ -11,6 +11,8 @@ class SourceItem extends Equatable {
   final String? error;
   final ProviderHealthStatus health;
   final String? healthError;
+  final String repoUrl;
+  final String repoDisplayName;
 
   const SourceItem({
     required this.name,
@@ -20,6 +22,8 @@ class SourceItem extends Equatable {
     this.error,
     this.health = ProviderHealthStatus.healthy,
     this.healthError,
+    this.repoUrl = '',
+    this.repoDisplayName = '',
   });
 
   SourceItem copyWith({
@@ -29,6 +33,8 @@ class SourceItem extends Equatable {
     bool clearError = false,
     ProviderHealthStatus? health,
     String? healthError,
+    String? repoUrl,
+    String? repoDisplayName,
   }) =>
       SourceItem(
         name: name,
@@ -38,10 +44,13 @@ class SourceItem extends Equatable {
         error: clearError ? null : (error ?? this.error),
         health: health ?? this.health,
         healthError: healthError ?? this.healthError,
+        repoUrl: repoUrl ?? this.repoUrl,
+        repoDisplayName: repoDisplayName ?? this.repoDisplayName,
       );
 
   @override
-  List<Object?> get props => [name, url, loaded, info, error, health, healthError];
+  List<Object?> get props =>
+      [name, url, loaded, info, error, health, healthError, repoUrl, repoDisplayName];
 }
 
 enum SourcesStatus { initial, loading, ready }

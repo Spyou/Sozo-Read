@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../../../core/services/image_cache_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
 import 'package:hive/hive.dart';
 
 import '../../../core/di/injection.dart';
@@ -103,10 +104,14 @@ class _SourcesViewState extends State<_SourcesView>
         nameCtrl.text.trim().isNotEmpty &&
         urlCtrl.text.trim().isNotEmpty) {
       if (!context.mounted) return;
+      // Manual installs from the dialog have no repo of origin — they
+      // get tagged as a user-added entry so they still receive a
+      // composite key (registry falls back to a synthetic origin).
       context.read<SourcesBloc>().add(
             SourceInstalled(
               name: nameCtrl.text.trim(),
               url: urlCtrl.text.trim(),
+              displayName: 'User-added',
             ),
           );
     }
@@ -245,20 +250,54 @@ class _SourceTile extends StatelessWidget {
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
-        trailing: PopupMenuButton<String>(
-          icon: const Icon(Icons.more_vert),
-          color: AppColors.surface,
-          onSelected: (v) {
-            final bloc = context.read<SourcesBloc>();
-            if (v == 'update') bloc.add(SourceUpdated(item.name));
-            if (v == 'remove') bloc.add(SourceUninstalled(item.name));
-            if (v == 'reset') bloc.add(SourceHealthReset(item.name));
-          },
-          itemBuilder: (_) => [
-            const PopupMenuItem(value: 'update', child: Text('Update')),
-            const PopupMenuItem(value: 'remove', child: Text('Remove')),
-            if (item.health != ProviderHealthStatus.healthy)
-              const PopupMenuItem(value: 'reset', child: Text('Reset')),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Per-source settings. Only meaningful for loaded providers
+            // since the schema lives in the JS file — disable the icon
+            // when the runtime hasn't loaded this entry so users don't
+            // navigate to an empty form.
+            IconButton(
+              tooltip: 'Source settings',
+              icon: const Icon(Icons.tune_rounded),
+              color: item.loaded
+                  ? AppColors.textSecondary
+                  : AppColors.textTertiary,
+              onPressed: item.loaded
+                  ? () => context.pushNamed(
+                        'source-settings',
+                        pathParameters: {'sourceId': item.name},
+                        queryParameters: {
+                          'repoUrl': item.repoUrl,
+                          if (item.info?.name != null)
+                            'displayName': item.info!.name,
+                        },
+                      )
+                  : null,
+            ),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert),
+              color: AppColors.surface,
+              onSelected: (v) {
+                final bloc = context.read<SourcesBloc>();
+                // Scope mutations to this (repoUrl, sourceId) pair so we
+                // don't accidentally touch a sibling repo's copy when two
+                // repos publish the same sourceId.
+                if (v == 'update') {
+                  bloc.add(SourceUpdated(item.name, repoUrl: item.repoUrl));
+                }
+                if (v == 'remove') {
+                  bloc.add(SourceUninstalled(item.name, repoUrl: item.repoUrl));
+                }
+                if (v == 'reset') bloc.add(SourceHealthReset(item.name));
+              },
+              itemBuilder: (_) => [
+                const PopupMenuItem(value: 'update', child: Text('Update')),
+                const PopupMenuItem(value: 'remove', child: Text('Remove')),
+                if (item.health != ProviderHealthStatus.healthy)
+                  const PopupMenuItem(value: 'reset', child: Text('Reset')),
+              ],
+            ),
           ],
         ),
       ),
@@ -331,10 +370,14 @@ class _ReposTabState extends State<_ReposTab> {
     super.dispose();
   }
 
-  Set<String> _installedIds() {
+  /// Returns the set of composite `(repoUrl, sourceId)` keys currently
+  /// installed. The Repos tab pills check membership per-repo, so two
+  /// repos that publish the same sourceId can show "Install" in one
+  /// section and "Installed" in the other.
+  Set<String> _installedKeys() {
     return sl<ProviderRegistry>()
         .getInstalled()
-        .map((e) => e.name)
+        .map((e) => ProviderRegistry.providerKey(e.originRepoUrl, e.name))
         .toSet();
   }
 
@@ -402,7 +445,7 @@ class _ReposTabState extends State<_ReposTab> {
         return BlocBuilder<SourceFilterCubit, bool>(
           bloc: sl<SourceFilterCubit>(),
           builder: (context, showNsfw) {
-            final installed = _installedIds();
+            final installedKeys = _installedKeys();
             return ListView.builder(
               padding: const EdgeInsets.fromLTRB(0, 8, 0, 96),
               // +1 for the NSFW toggle header.
@@ -419,7 +462,7 @@ class _ReposTabState extends State<_ReposTab> {
                 return _RepoSection(
                   repo: repo,
                   showNsfw: showNsfw,
-                  installedIds: installed,
+                  installedKeys: installedKeys,
                 );
               },
             );
@@ -471,12 +514,16 @@ class _RepoSection extends StatefulWidget {
   const _RepoSection({
     required this.repo,
     required this.showNsfw,
-    required this.installedIds,
+    required this.installedKeys,
   });
 
   final ProviderRepo repo;
   final bool showNsfw;
-  final Set<String> installedIds;
+
+  /// Composite keys of currently-installed providers — see
+  /// `ProviderRegistry.providerKey`. Membership is checked per-source
+  /// inside this repo so two repos sharing a sourceId render correctly.
+  final Set<String> installedKeys;
 
   @override
   State<_RepoSection> createState() => _RepoSectionState();
@@ -492,7 +539,7 @@ class _RepoSectionState extends State<_RepoSection> {
   // the previous stateless version.
   ProviderRepo get repo => widget.repo;
   bool get showNsfw => widget.showNsfw;
-  Set<String> get installedIds => widget.installedIds;
+  Set<String> get installedKeys => widget.installedKeys;
 
   Future<void> _refresh(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
@@ -615,7 +662,8 @@ class _RepoSectionState extends State<_RepoSection> {
         .toList(growable: false);
 
     final installedFromThisRepo = repo.sources
-        .where((s) => installedIds.contains(s.id))
+        .where((s) => installedKeys
+            .contains(ProviderRegistry.providerKey(repo.url, s.id)))
         .length;
     final headerCount = repo.sources.isEmpty
         ? null
@@ -752,7 +800,10 @@ class _RepoSectionState extends State<_RepoSection> {
                             (source) => _SourceRow(
                               repo: repo,
                               source: source,
-                              installed: installedIds.contains(source.id),
+                              installed: installedKeys.contains(
+                                ProviderRegistry.providerKey(
+                                    repo.url, source.id),
+                              ),
                             ),
                           ),
                       ],
@@ -783,7 +834,12 @@ class _SourceRow extends StatelessWidget {
     // Installed list out of sync.
     final bloc = context.read<SourcesBloc>();
     final fileUrl = sl<ProviderReposRegistry>().resolveFileUrl(repo, source);
-    bloc.add(SourceInstalled(name: source.id, url: fileUrl));
+    bloc.add(SourceInstalled(
+      name: source.id,
+      url: fileUrl,
+      repoUrl: repo.url,
+      displayName: repo.displayName,
+    ));
     messenger.showAppSnack(
       SnackBar(content: Text('Installed ${source.name}')),
     );
@@ -798,7 +854,9 @@ class _SourceRow extends StatelessWidget {
   /// new code so the user sees the update without restarting.
   Future<void> _update(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
-    context.read<SourcesBloc>().add(SourceUpdated(source.id));
+    context
+        .read<SourcesBloc>()
+        .add(SourceUpdated(source.id, repoUrl: repo.url));
     messenger.showAppSnack(
       SnackBar(content: Text('Updating ${source.name}…')),
     );
@@ -835,7 +893,9 @@ class _SourceRow extends StatelessWidget {
     // removal. Without this the Repos tab's "Install" pill flipped
     // correctly via its Hive box watch, but the Installed tab kept
     // showing the source until next screen open.
-    context.read<SourcesBloc>().add(SourceUninstalled(source.id));
+    context
+        .read<SourcesBloc>()
+        .add(SourceUninstalled(source.id, repoUrl: repo.url));
     messenger.showAppSnack(
       SnackBar(content: Text('Removed ${source.name}')),
     );

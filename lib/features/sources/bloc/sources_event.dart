@@ -15,25 +15,34 @@ class SourcesRefreshed extends SourcesEvent {
 }
 
 class SourceInstalled extends SourcesEvent {
-  const SourceInstalled({required this.name, required this.url});
+  const SourceInstalled({
+    required this.name,
+    required this.url,
+    this.repoUrl = '',
+    this.displayName = '',
+  });
   final String name;
   final String url;
+  final String repoUrl;
+  final String displayName;
   @override
-  List<Object?> get props => [name, url];
+  List<Object?> get props => [name, url, repoUrl, displayName];
 }
 
 class SourceUninstalled extends SourcesEvent {
-  const SourceUninstalled(this.name);
+  const SourceUninstalled(this.name, {this.repoUrl});
   final String name;
+  final String? repoUrl;
   @override
-  List<Object?> get props => [name];
+  List<Object?> get props => [name, repoUrl];
 }
 
 class SourceUpdated extends SourcesEvent {
-  const SourceUpdated(this.name);
+  const SourceUpdated(this.name, {this.repoUrl});
   final String name;
+  final String? repoUrl;
   @override
-  List<Object?> get props => [name];
+  List<Object?> get props => [name, repoUrl];
 }
 
 class SourceHealthReset extends SourcesEvent {

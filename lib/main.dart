@@ -8,9 +8,12 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'core/app_bootstrap.dart';
 import 'core/di/injection.dart';
 import 'core/router/app_router.dart' show buildRouter, parseSozoReadDeepLink;
+import 'core/security/app_lock_cubit.dart';
 import 'core/services/chapter_check_service.dart';
+import 'core/state/incognito_cubit.dart';
 import 'core/state/theme_cubit.dart';
 import 'core/theme/app_theme.dart';
+import 'features/lock/lock_screen.dart';
 import 'features/settings/widgets/whats_new_sheet.dart';
 
 void main() async {
@@ -147,6 +150,9 @@ class _SozoReadAppState extends State<SozoReadApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       _maybeCheckNewChapters();
     }
+    // Forward the lifecycle event to App Lock so it can re-lock the gate
+    // on resume if the configured timeout has elapsed.
+    sl<AppLockCubit>().handleLifecycle(state);
     super.didChangeAppLifecycleState(state);
   }
 
@@ -204,8 +210,15 @@ class _SozoReadAppState extends State<SozoReadApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    return BlocProvider.value(
-      value: sl<ThemeCubit>(),
+    return MultiBlocProvider(
+      providers: [
+        BlocProvider.value(value: sl<ThemeCubit>()),
+        BlocProvider.value(value: sl<AppLockCubit>()),
+        // Volatile, session-only Incognito toggle. Lives above the lock
+        // gate so settings/home toggles work from the moment the app
+        // unlocks. Never persisted — closing the app resets to off.
+        BlocProvider.value(value: sl<IncognitoCubit>()),
+      ],
       child: BlocBuilder<ThemeCubit, ThemeSettings>(
         builder: (context, theme) {
           // Light mode is disabled for v1 — the light palette hasn't been
@@ -219,9 +232,39 @@ class _SozoReadAppState extends State<SozoReadApp> with WidgetsBindingObserver {
             themeMode: ThemeMode.dark,
             debugShowCheckedModeBanner: false,
             routerConfig: _router,
+            // Wrap every routed page in a gate that paints LockScreen over
+            // the router whenever AppLockCubit reports a locked state.
+            builder: (context, child) => AppLockGate(child: child),
           );
         },
       ),
+    );
+  }
+}
+
+/// Paints [LockScreen] over the supplied [child] whenever the App Lock
+/// cubit is in a locked (or unconfigured) state. Otherwise renders the
+/// child untouched — the cost when unlocked is one `BlocBuilder` rebuild.
+class AppLockGate extends StatelessWidget {
+  const AppLockGate({super.key, required this.child});
+  final Widget? child;
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocBuilder<AppLockCubit, AppLockState>(
+      builder: (context, state) {
+        final body = child ?? const SizedBox.shrink();
+        if (state.isUnlocked) return body;
+        // Stack so the router keeps its widget tree alive underneath — the
+        // user's reading position, scroll offsets, BLoC state etc. all
+        // survive a re-lock without a rebuild.
+        return Stack(
+          children: [
+            body,
+            const Positioned.fill(child: LockScreen()),
+          ],
+        );
+      },
     );
   }
 }

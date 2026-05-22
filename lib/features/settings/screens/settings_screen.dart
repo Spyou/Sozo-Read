@@ -1,13 +1,14 @@
 import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
-import '../../../core/services/image_cache_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/di/injection.dart';
+import '../../../core/provider/provider_registry.dart';
+import '../../../core/services/image_cache_manager.dart';
 import '../../../core/state/active_source_cubit.dart';
 import '../../../core/state/auth_service.dart';
 import '../../../core/state/novel_prefs_cubit.dart';
@@ -58,12 +59,15 @@ class _SettingsView extends StatelessWidget {
           // Source picker — single row, opens existing bottom sheet.
           BlocBuilder<ActiveSourceCubit, String?>(
             builder: (context, active) {
+              final label = active == null
+                  ? 'none'
+                  : ProviderRegistry.sourceIdOf(active);
               return SettingsCard(
                 children: [
                   SettingsTile(
                     icon: Icons.collections_bookmark_rounded,
                     title: 'Source',
-                    subtitle: active ?? 'none',
+                    subtitle: label,
                     onTap: () => showSourcePicker(context),
                   ),
                 ],
@@ -94,6 +98,12 @@ class _SettingsView extends StatelessWidget {
                 title: 'Trackers',
                 subtitle: 'AniList sync',
                 onTap: () => context.push('/settings/trackers'),
+              ),
+              SettingsTile(
+                icon: Icons.lock_outline_rounded,
+                title: 'Security',
+                subtitle: 'App Lock, Incognito, privacy',
+                onTap: () => context.push('/settings/security'),
               ),
             ],
           ),
@@ -289,7 +299,7 @@ class _ProfileAvatar extends StatelessWidget {
     if (url.isEmpty) return fallback;
     return ClipOval(
       child: CachedNetworkImage(
-        cacheManager: appImageCacheManager,
+        cacheManager: sozoCacheManagerFor(context),
         imageUrl: url,
         width: size,
         height: size,

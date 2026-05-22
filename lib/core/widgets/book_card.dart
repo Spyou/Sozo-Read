@@ -44,7 +44,7 @@ class BookCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(10),
                     child: book.cover != null
                         ? CachedNetworkImage(
-                            cacheManager: appImageCacheManager,
+                            cacheManager: sozoCacheManagerFor(context),
                             imageUrl: book.cover!,
                             httpHeaders: book.coverHeaders,
                             fit: BoxFit.cover,

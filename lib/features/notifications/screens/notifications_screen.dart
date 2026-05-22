@@ -166,7 +166,7 @@ class _NotificationRow extends StatelessWidget {
           borderRadius: BorderRadius.circular(6),
           child: (n.coverUrl != null && n.coverUrl!.isNotEmpty)
               ? CachedNetworkImage(
-                  cacheManager: appImageCacheManager,
+                  cacheManager: sozoCacheManagerFor(context),
                   imageUrl: n.coverUrl!,
                   fit: BoxFit.cover,
                   placeholder: (_, _) => Container(color: AppColors.card),

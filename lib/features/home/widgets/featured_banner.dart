@@ -38,7 +38,7 @@ class FeaturedBanner extends StatelessWidget {
           children: [
             if (cover != null)
               CachedNetworkImage(
-                cacheManager: appImageCacheManager,
+                cacheManager: sozoCacheManagerFor(context),
                 imageUrl: cover,
                 httpHeaders: book.coverHeaders,
                 fit: BoxFit.cover,

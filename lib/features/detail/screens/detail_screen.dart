@@ -1398,7 +1398,7 @@ class _BackdropHeader extends StatelessWidget {
       children: [
         if (cover != null)
           CachedNetworkImage(
-            cacheManager: appImageCacheManager,
+            cacheManager: sozoCacheManagerFor(context),
             imageUrl: cover,
             httpHeaders: book.coverHeaders,
             fit: BoxFit.cover,
@@ -1437,7 +1437,7 @@ class _BackdropHeader extends StatelessWidget {
                     borderRadius: BorderRadius.circular(10),
                     child: cover != null
                         ? CachedNetworkImage(
-                            cacheManager: appImageCacheManager,
+                            cacheManager: sozoCacheManagerFor(context),
                             imageUrl: cover,
                             httpHeaders: book.coverHeaders,
                             fit: BoxFit.cover,
@@ -1542,7 +1542,7 @@ class _SkeletonDetail extends StatelessWidget {
               children: [
                 if (hasCover)
                   CachedNetworkImage(
-                    cacheManager: appImageCacheManager,
+                    cacheManager: sozoCacheManagerFor(context),
                     imageUrl: placeholder!.cover!,
                     httpHeaders: placeholder!.coverHeaders,
                     fit: BoxFit.cover,
@@ -1582,7 +1582,7 @@ class _SkeletonDetail extends StatelessWidget {
                               ? ClipRRect(
                                   borderRadius: BorderRadius.circular(10),
                                   child: CachedNetworkImage(
-                                    cacheManager: appImageCacheManager,
+                                    cacheManager: sozoCacheManagerFor(context),
                                     imageUrl: placeholder!.cover!,
                                     httpHeaders: placeholder!.coverHeaders,
                                     fit: BoxFit.cover,
@@ -3069,7 +3069,7 @@ class _ChapterThumbnailState extends State<_ChapterThumbnail> {
         borderRadius: BorderRadius.circular(6),
         child: src != null
             ? CachedNetworkImage(
-                cacheManager: appImageCacheManager,
+                cacheManager: sozoCacheManagerFor(context),
                 imageUrl: src,
                 fit: BoxFit.cover,
                 placeholder: (_, _) => Container(color: AppColors.card),

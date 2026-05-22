@@ -18,6 +18,50 @@ function getInfo() {
   };
 }
 
+// Exposes a per-source settings schema. Read by the host at the
+// `/sources/:sourceId/settings` screen, persisted to Hive, and
+// re-injected into the runtime as `__settings[__SOURCE_ID]` before
+// the next provider call. Falling back to defaults when the user
+// hasn't picked anything is handled by the host.
+function getSettings() {
+  return [
+    {
+      key: 'contentRating',
+      label: 'Content rating',
+      type: 'multiEnum',
+      options: [
+        { value: 'safe', label: 'Safe' },
+        { value: 'suggestive', label: 'Suggestive' },
+        { value: 'erotica', label: 'Erotica' },
+        { value: 'pornographic', label: 'Pornographic' }
+      ],
+      default: ['safe', 'suggestive']
+    }
+  ];
+}
+
+// Pulls the user's chosen content ratings out of the host-injected
+// `__settings` slot, validating against the known whitelist. Falls
+// back to the schema default so this works even on first-launch
+// before the host has called `setSettings`.
+function _activeContentRatings() {
+  var defaults = ['safe', 'suggestive'];
+  var allowed = ['safe', 'suggestive', 'erotica', 'pornographic'];
+  try {
+    var s = globalThis.__settings && globalThis.__settings[__SOURCE_ID];
+    if (!s) return defaults;
+    var v = s.contentRating;
+    if (!v || !v.length) return defaults;
+    var out = [];
+    for (var i = 0; i < v.length; i++) {
+      if (allowed.indexOf(v[i]) !== -1) out.push(v[i]);
+    }
+    return out.length ? out : defaults;
+  } catch (e) {
+    return defaults;
+  }
+}
+
 function _coverUrl(mangaId, fileName) {
   if (!fileName) return null;
   return COVER_BASE + '/' + mangaId + '/' + fileName + '.512.jpg';
@@ -85,6 +129,7 @@ function search(query, page) {
   var limit = 20;
   var offset = (page - 1) * limit;
   var hasQuery = query && String(query).trim().length > 0;
+  var ratings = _activeContentRatings();
   var params = [
     'limit=' + limit,
     'offset=' + offset,
@@ -92,10 +137,11 @@ function search(query, page) {
     'includes%5B%5D=author',
     'includes%5B%5D=artist',
     'availableTranslatedLanguage%5B%5D=' + LANG,
-    'contentRating%5B%5D=safe',
-    'contentRating%5B%5D=suggestive',
     'hasAvailableChapters=true'
   ];
+  for (var ri = 0; ri < ratings.length; ri++) {
+    params.push('contentRating%5B%5D=' + ratings[ri]);
+  }
   if (hasQuery) {
     params.push('order%5Brelevance%5D=desc');
     params.push('title=' + encodeURIComponent(String(query).trim()));

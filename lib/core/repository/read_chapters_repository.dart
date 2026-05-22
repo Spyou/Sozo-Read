@@ -1,5 +1,8 @@
 import 'package:hive/hive.dart';
 
+import '../di/injection.dart';
+import '../state/incognito_cubit.dart';
+
 /// A single chapter the user has finished reading.
 ///
 /// The composite [key] (`sourceId::bookId::chapterId`) is the Hive primary
@@ -86,6 +89,12 @@ class ReadChaptersRepository {
       chapterId: chapterId,
       readAt: DateTime.now(),
     );
+    // Incognito: return an ephemeral entry without touching Hive or the
+    // dirty/sync queue. unmark() is left untouched so users can still
+    // clean up history while incognito is on.
+    if (sl<IncognitoCubit>().state) {
+      return entry;
+    }
     await _box.put(entry.key, entry.toJson());
     await _tombstones.delete(entry.key);
     await _dirty.put(entry.key, entry.readAt.toIso8601String());

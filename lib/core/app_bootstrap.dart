@@ -13,16 +13,21 @@ import 'provider/provider_downloader.dart';
 import 'provider/provider_registry.dart';
 import 'provider/provider_repo_registry.dart';
 import 'repository/book_detail_cache.dart';
+import 'repository/categories_repository.dart';
 import 'repository/chapter_bookmarks_repository.dart';
 import 'repository/dictionary_repository.dart';
 import 'repository/chapter_thumbnails_repository.dart';
 import 'repository/downloads_repository.dart';
+import 'repository/library_categories_repository.dart';
 import 'repository/library_repository.dart';
 import 'repository/notifications_repository.dart';
 import 'repository/page_bookmarks_repository.dart';
 import 'repository/provider_repository.dart';
+import 'repository/provider_settings_repository.dart';
 import 'repository/read_chapters_repository.dart';
+import 'provider/provider_manager.dart';
 import 'repository/tracker_repository.dart';
+import 'security/app_lock_cubit.dart';
 import 'services/changelog_service.dart';
 import 'services/download_notification_service.dart';
 import 'services/downloads_background_service.dart';
@@ -64,13 +69,21 @@ class AppBootstrap {
     await DownloadsRepository.init();
     await ChapterBookmarksRepository.init();
     await PageBookmarksRepository.init();
+    await CategoriesRepository.init();
+    await LibraryCategoriesRepository.init();
     await ChapterThumbnailsRepository.init();
     await NotificationsRepository.init();
     await DictionaryRepository.init();
     await BookDetailCache.init();
+    await ProviderSettingsRepository.init();
     await TrackerRepository.init();
     await ActiveSourceCubit.init();
-    await configureDependencies();
+    // Build the App Lock cubit BEFORE configureDependencies so it can be
+    // injected into the DI graph at registration time. The constructor
+    // resolves PIN presence + FLAG_SECURE so the very first frame paints
+    // the lock screen (or not) deterministically.
+    final appLock = await AppLockCubit.init();
+    await configureDependencies(appLock: appLock);
     // Eager-init each tracker so their auth state is resolved (tokens
     // read from secure storage, viewer fetched) before any UI reads
     // `isAuthenticated`. Fire-and-forget — failure to reach the remote
@@ -85,7 +98,19 @@ class AppBootstrap {
     sl<ThemeCubit>();
     sl<NovelPrefsCubit>();
     sl<MangaPrefsCubit>();
+    // Rewrites legacy bare-sourceId keys in `provider_registry` to the
+    // composite `(repoUrl, sourceId)` keys introduced by the multi-repo
+    // refactor. Idempotent — already-composite keys are skipped. Must
+    // run BEFORE seedDefaults so newly-seeded entries aren't re-rewritten.
+    await sl<ProviderRegistry>().migrate();
     await sl<ProviderRegistry>().seedDefaults();
+    // Push every saved per-source settings row into the JS runtime so
+    // providers can read `__settings[sourceId]` from their first call.
+    // The runtime hasn't loaded any providers yet (loadBundledProviders /
+    // loadAll runs later) but `__settings` is a plain object — pre-
+    // seeding it is harmless and cheaper than racing with the provider
+    // load to push settings before the first user-triggered call.
+    _seedRuntimeSettings();
     // Seed the default Provider repo (Spyou's manifest) at first
     // launch. Idempotent — subsequent launches are a no-op when the
     // URL is already tracked. Fire-and-forget so a slow first-launch
@@ -99,8 +124,19 @@ class AppBootstrap {
     // so users see new / removed sources without needing to manually
     // hit the refresh icon. Fire-and-forget; errors are swallowed per
     // repo so one dead URL doesn't impact the rest of bootstrap.
+    // After the refresh lands, re-stamp any `bundled://` / `builtin://`
+    // entries whose sourceId is now claimed by exactly one tracked
+    // repo. Without this the Repos tab leaves them marked "Not
+    // installed" even though they're loaded and running.
     // ignore: discarded_futures
-    sl<ProviderReposRegistry>().refreshAllInBackground();
+    () async {
+      await sl<ProviderReposRegistry>().refreshAllInBackground();
+      try {
+        await sl<ProviderRegistry>().reassociateBundled();
+      } catch (e) {
+        debugPrint('[bootstrap] reassociateBundled failed: $e');
+      }
+    }();
     // Note: we do NOT call loadAll() here — that would try to download
     // providers from the placeholder GitHub URL and waste time. In dev,
     // main.dart calls loadBundledProviders() instead.
@@ -187,5 +223,25 @@ Future<void> _prewarmProviderInfo() async {
     try {
       await p.getInfo();
     } catch (_) {/* tolerated */}
+  }
+}
+
+/// Pushes every persisted per-source settings row into the JS runtime
+/// so providers can read `__settings[sourceId]` immediately on first
+/// invocation. Reads from the composite-key Hive box and strips the
+/// repoUrl prefix because the runtime only knows about `sourceId`s —
+/// the live `(repoUrl, sourceId)` slot for any given sourceId is
+/// whichever entry was loaded last (see `ProviderManager.load`).
+void _seedRuntimeSettings() {
+  try {
+    final repo = sl<ProviderSettingsRepository>();
+    final manager = sl<ProviderManager>();
+    final all = repo.getAll();
+    for (final entry in all.entries) {
+      final sourceId = ProviderRegistry.sourceIdOf(entry.key);
+      manager.setSettings(sourceId, entry.value);
+    }
+  } catch (e) {
+    debugPrint('[bootstrap] seed provider settings failed: $e');
   }
 }

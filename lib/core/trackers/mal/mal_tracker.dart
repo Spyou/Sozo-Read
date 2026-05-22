@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../di/injection.dart';
+import '../../state/incognito_cubit.dart';
 import '../tracker.dart';
 import '../tracker_entry.dart';
 import 'mal_api.dart';
@@ -103,13 +105,17 @@ class MalTracker implements Tracker {
     int? progress,
     TrackerStatus? status,
     double? score,
-  }) =>
-      api.saveMediaListEntry(
-        mediaId: remoteId,
-        progress: progress,
-        status: status,
-        score: score,
-      );
+  }) async {
+    // Incognito: drop the push entirely (no progress, status, or score
+    // updates leak to the remote tracker for this session).
+    if (sl<IncognitoCubit>().state) return;
+    await api.saveMediaListEntry(
+      mediaId: remoteId,
+      progress: progress,
+      status: status,
+      score: score,
+    );
+  }
 
   @override
   Future<TrackerEntry?> fetchEntry(int remoteId) =>

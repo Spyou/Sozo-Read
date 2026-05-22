@@ -13,6 +13,7 @@ import '../../../core/services/cloudinary_service.dart';
 import '../../../core/state/auth_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/utils/avatar_palette.dart';
+import '../../settings/widgets/sync_status_tile.dart';
 
 /// Account / profile page. Shown when the user is signed in.
 ///
@@ -344,7 +345,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 28),
+                // Library sync status + manual trigger. Lives here so the
+                // user has a single account-management surface for both
+                // their profile and their cloud-sync state.
+                const SyncStatusTile(margin: EdgeInsets.zero),
+                const SizedBox(height: 28),
                 OutlinedButton.icon(
                   onPressed: _confirmSignOut,
                   icon: const Icon(Icons.logout_rounded, color: Colors.redAccent),
@@ -407,7 +413,7 @@ class _Avatar extends StatelessWidget {
         children: [
           if (hasImage)
             CachedNetworkImage(
-              cacheManager: appImageCacheManager,
+              cacheManager: sozoCacheManagerFor(context),
               imageUrl: url,
               fit: BoxFit.cover,
               fadeInDuration: const Duration(milliseconds: 180),

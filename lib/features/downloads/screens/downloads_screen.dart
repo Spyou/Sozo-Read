@@ -357,7 +357,7 @@ class _SeriesHeader extends StatelessWidget {
                 height: 56,
                 child: cover != null
                     ? CachedNetworkImage(
-                        cacheManager: appImageCacheManager,
+                        cacheManager: sozoCacheManagerFor(context),
                         imageUrl: cover,
                         httpHeaders: coverHeaders,
                         fit: BoxFit.cover,

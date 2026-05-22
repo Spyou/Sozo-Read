@@ -51,14 +51,21 @@ class SourcesBloc extends Bloc<SourcesEvent, SourcesState> {
     final entries = _registry.getInstalled();
     final items = <SourceItem>[];
     for (final e in entries) {
-      final loaded = _repo.provider(e.name) != null;
-      final provider = _repo.provider(e.name);
+      // Runtime is keyed by sourceId only — at most one (repoUrl,
+      // sourceId) pair is live at a time. Match origins so a registry
+      // entry for repo A doesn't flip to "loaded" when repo B's copy
+      // is the live one for the same sourceId.
+      final live = _repo.provider(e.name);
+      final loaded = live != null && live.originRepoUrl == e.originRepoUrl;
+      final provider = loaded ? live : null;
       var item = SourceItem(
         name: e.name,
         url: e.url,
         loaded: loaded,
         health: provider?.healthStatus ?? ProviderHealthStatus.healthy,
         healthError: provider?.lastError,
+        repoUrl: e.originRepoUrl,
+        repoDisplayName: e.displayName,
       );
       if (loaded) {
         final info = await _repo.info(e.name);
@@ -78,7 +85,12 @@ class SourcesBloc extends Bloc<SourcesEvent, SourcesState> {
   }
 
   Future<void> _onInstalled(SourceInstalled event, Emitter<SourcesState> emit) async {
-    final result = await _repo.install(event.name, event.url);
+    final result = await _repo.install(
+      event.name,
+      event.url,
+      repoUrl: event.repoUrl,
+      displayName: event.displayName,
+    );
     result.fold(
       (f) => emit(state.copyWith(error: f.message)),
       (_) {},
@@ -87,12 +99,12 @@ class SourcesBloc extends Bloc<SourcesEvent, SourcesState> {
   }
 
   Future<void> _onUninstalled(SourceUninstalled event, Emitter<SourcesState> emit) async {
-    await _repo.uninstall(event.name);
+    await _repo.uninstall(event.name, repoUrl: event.repoUrl);
     await _load(emit);
   }
 
   Future<void> _onUpdated(SourceUpdated event, Emitter<SourcesState> emit) async {
-    await _repo.refresh(event.name);
+    await _repo.refresh(event.name, repoUrl: event.repoUrl);
     await _load(emit);
   }
 

@@ -1,7 +1,9 @@
 import 'package:hive/hive.dart';
 
+import '../di/injection.dart';
 import '../models/book_item.dart';
 import '../models/provider_info.dart';
+import '../state/incognito_cubit.dart';
 
 enum LibraryStatus { reading, completed, onHold, planning }
 
@@ -179,6 +181,12 @@ class LibraryRepository {
   }) async {
     final cur = get(sourceId, bookId);
     if (cur == null) return null;
+    // Incognito: don't persist the new progress watermark or push it to
+    // the cloud sync queue. Return the entry unchanged so callers that
+    // rebuild from the result aren't surprised by a null.
+    if (sl<IncognitoCubit>().state) {
+      return cur;
+    }
     final updated = cur.copyWith(
       lastChapterIndex: chapterIndex,
       lastChapterProgress: chapterProgress,

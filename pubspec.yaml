@@ -115,6 +115,15 @@ dependencies:
   # for apps like this.
   flutter_background_service: ^5.0.10
 
+  # SHA-256 hashing for the App Lock PIN (salt+pin -> digest, stored in
+  # flutter_secure_storage). Already pulled transitively by
+  # supabase_flutter; declared here so the import is explicit.
+  crypto: ^3.0.5
+
+  # Biometric prompt (Face ID / Touch ID / fingerprint) for App Lock.
+  # PIN remains the fallback and the source of truth for the lock state.
+  local_auth: ^2.3.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

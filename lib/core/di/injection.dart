@@ -4,16 +4,23 @@ import 'package:get_it/get_it.dart';
 import '../../features/home/bloc/home_bloc.dart';
 import '../provider/provider_downloader.dart';
 import '../provider/provider_manager.dart';
+import '../security/app_lock_cubit.dart';
+import '../security/biometric_service.dart';
+import '../security/pin_storage.dart';
+import '../security/secure_window_channel.dart';
 import '../provider/provider_registry.dart';
 import '../provider/provider_repo_registry.dart';
 import '../repository/book_detail_cache.dart';
+import '../repository/categories_repository.dart';
 import '../repository/chapter_bookmarks_repository.dart';
 import '../repository/chapter_thumbnails_repository.dart';
 import '../repository/downloads_repository.dart';
+import '../repository/library_categories_repository.dart';
 import '../repository/library_repository.dart';
 import '../repository/notifications_repository.dart';
 import '../repository/page_bookmarks_repository.dart';
 import '../repository/provider_repository.dart';
+import '../repository/provider_settings_repository.dart';
 import '../repository/read_chapters_repository.dart';
 import '../repository/tracker_repository.dart';
 import '../repository/dictionary_repository.dart';
@@ -32,6 +39,7 @@ import '../services/notification_service.dart';
 import '../state/active_source_cubit.dart';
 import '../state/auth_service.dart';
 import '../state/chapter_sort_cubit.dart';
+import '../state/incognito_cubit.dart';
 import '../state/source_filter_cubit.dart';
 import '../state/manga_prefs_cubit.dart';
 import '../state/notifications_prefs_cubit.dart';
@@ -41,7 +49,16 @@ import '../sync/library_sync_service.dart';
 
 final GetIt sl = GetIt.instance;
 
-Future<void> configureDependencies() async {
+Future<void> configureDependencies({AppLockCubit? appLock}) async {
+  // App Lock — PIN, biometric, FLAG_SECURE. The cubit is built BEFORE
+  // runApp by AppBootstrap so the lock screen can paint the first frame.
+  sl.registerLazySingleton<PinStorage>(() => PinStorage());
+  sl.registerLazySingleton<BiometricService>(() => BiometricService());
+  sl.registerLazySingleton<SecureWindowChannel>(() => SecureWindowChannel());
+  if (appLock != null) {
+    sl.registerSingleton<AppLockCubit>(appLock);
+  }
+
   // Dio with sane defaults for scraping.
   sl.registerLazySingleton<Dio>(() {
     final dio = Dio(BaseOptions(
@@ -59,14 +76,19 @@ Future<void> configureDependencies() async {
 
   sl.registerLazySingleton<ProviderDownloader>(() => ProviderDownloader(dio: sl()));
   sl.registerLazySingleton<ProviderManager>(() => ProviderManager(dio: sl()));
-  sl.registerLazySingleton<ProviderRegistry>(
-    () => ProviderRegistry(downloader: sl(), manager: sl()),
-  );
+  // ProviderReposRegistry registered FIRST so ProviderRegistry can pull
+  // it in for the legacy-key migration on cold start.
   sl.registerLazySingleton<ProviderReposRegistry>(
     () => ProviderReposRegistry(dio: sl()),
   );
+  sl.registerLazySingleton<ProviderRegistry>(
+    () => ProviderRegistry(downloader: sl(), manager: sl(), repos: sl()),
+  );
   sl.registerLazySingleton<ProviderRepository>(
     () => ProviderRepository(manager: sl(), registry: sl()),
+  );
+  sl.registerLazySingleton<ProviderSettingsRepository>(
+    () => ProviderSettingsRepository(),
   );
   sl.registerLazySingleton<LibraryRepository>(() => LibraryRepository());
   sl.registerLazySingleton<ReadChaptersRepository>(
@@ -79,6 +101,10 @@ Future<void> configureDependencies() async {
   sl.registerLazySingleton<PageBookmarksRepository>(
     () => PageBookmarksRepository(),
   );
+  sl.registerLazySingleton<CategoriesRepository>(() => CategoriesRepository());
+  sl.registerLazySingleton<LibraryCategoriesRepository>(
+    () => LibraryCategoriesRepository(),
+  );
   sl.registerLazySingleton<ChapterThumbnailsRepository>(
     () => ChapterThumbnailsRepository(),
   );
@@ -90,6 +116,8 @@ Future<void> configureDependencies() async {
     () => ActiveSourceCubit(repository: sl()),
   );
   sl.registerLazySingleton<ThemeCubit>(() => ThemeCubit());
+  // Volatile session toggle — never persisted, see [IncognitoCubit].
+  sl.registerLazySingleton<IncognitoCubit>(() => IncognitoCubit());
   sl.registerLazySingleton<NovelPrefsCubit>(() => NovelPrefsCubit());
   sl.registerLazySingleton<MangaPrefsCubit>(() => MangaPrefsCubit());
   sl.registerLazySingleton<ChapterSortCubit>(() => ChapterSortCubit());
@@ -104,6 +132,8 @@ Future<void> configureDependencies() async {
       readChapters: sl(),
       chapterBookmarks: sl(),
       pageBookmarks: sl(),
+      categories: sl(),
+      libraryCategories: sl(),
       auth: sl(),
     ),
   );

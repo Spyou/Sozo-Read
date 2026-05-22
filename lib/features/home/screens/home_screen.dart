@@ -10,6 +10,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import '../../../core/di/injection.dart';
 import '../../../core/models/book_item.dart';
+import '../../../core/provider/provider_registry.dart';
 import '../../../core/repository/library_repository.dart';
 import '../../../core/repository/notifications_repository.dart';
 import '../../../core/state/active_source_cubit.dart';
@@ -38,15 +39,21 @@ class HomeScreen extends StatelessWidget {
       value: sl<HomeBloc>(),
       child: BlocListener<ActiveSourceCubit, String?>(
         bloc: activeCubit,
-        listener: (ctx, src) {
-          if (src != null) ctx.read<HomeBloc>().add(HomeSourceChanged(src));
+        listener: (ctx, key) {
+          // HomeBloc only cares about the bare sourceId — that's what
+          // the JS runtime is keyed by and what BookItem rows carry.
+          if (key != null) {
+            ctx.read<HomeBloc>().add(
+                  HomeSourceChanged(ProviderRegistry.sourceIdOf(key)),
+                );
+          }
         },
         child: Builder(builder: (ctx) {
           // If splash skipped (e.g. hot-restart lands directly on /home) and
           // no source has been pushed yet, kick the bloc off now.
           final bloc = ctx.read<HomeBloc>();
           activeCubit.initializeIfNeeded();
-          final src = activeCubit.state;
+          final src = activeCubit.activeSourceId;
           if (src != null && bloc.state.sourceId == null) {
             bloc.add(HomeSourceChanged(src));
           }

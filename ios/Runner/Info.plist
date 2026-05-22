@@ -8,6 +8,8 @@
 		<string>Sozo Read needs access to your photos so you can pick a profile picture.</string>
 		<key>NSCameraUsageDescription</key>
 		<string>Sozo Read needs camera access so you can take a profile picture.</string>
+		<key>NSFaceIDUsageDescription</key>
+		<string>Unlock Sozo Read with Face ID</string>
 		<key>CFBundleDevelopmentRegion</key>
 		<string>$(DEVELOPMENT_LANGUAGE)</string>
 		<key>CFBundleDisplayName</key>

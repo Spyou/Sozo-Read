@@ -57,6 +57,25 @@ class _JsHost {
     _runtime.evaluate("delete globalThis.__providers[${jsonEncode(sourceId)}];");
   }
 
+  /// Pushes [settings] into the JS runtime as `__settings[sourceId]`.
+  ///
+  /// One-shot synchronous eval — no mutex / queue. The existing call
+  /// path already runs without a host-wide lock (see [call]'s doc), and
+  /// QuickJS serialises FFI calls internally, so writing this slot
+  /// between provider calls is safe. Replaces the slot entirely rather
+  /// than merging, so cleared keys disappear from the JS side too.
+  void setSettings(String sourceId, Map<String, dynamic> settings) {
+    final r = _runtime.evaluate(
+      '__settings[${jsonEncode(sourceId)}] = ${jsonEncode(settings)};',
+    );
+    if (r.isError) {
+      // Don't throw — settings push is best-effort. The provider just
+      // sees an empty object and falls back to its schema defaults.
+      // ignore: avoid_print
+      print('[settings] push failed for $sourceId: ${r.stringResult}');
+    }
+  }
+
   /// Calls `__providers[sourceId][method](...args)` and returns the resolved
   /// JSON string.
   ///
@@ -230,10 +249,25 @@ class _ProviderHealth {
 
 /// Thin per-source wrapper. Calls go through the shared _JsHost.
 class JsProvider implements BaseProvider {
-  JsProvider._({required this.sourceId, required _JsHost host}) : _host = host;
+  JsProvider._({
+    required this.sourceId,
+    required this.originRepoUrl,
+    required this.displayName,
+    required _JsHost host,
+  }) : _host = host;
 
   @override
   final String sourceId;
+
+  /// Manifest URL of the repo this provider was installed from.
+  /// Empty for legacy / built-in entries that pre-date the
+  /// composite-key refactor.
+  final String originRepoUrl;
+
+  /// Human-readable repo name, snapshotted at install time. Used by
+  /// the source picker to render the row's subtitle.
+  final String displayName;
+
   final _JsHost _host;
 
   /// Optional sink for JS console messages.
@@ -298,6 +332,27 @@ class JsProvider implements BaseProvider {
     final map = jsonDecode(raw) as Map<String, dynamic>;
     return NovelContent.fromJson(map);
   }
+
+  /// Returns the provider's settings schema, or null if the JS file
+  /// doesn't define `getSettings()`. Never throws — the wrapped
+  /// namespace map sets the slot to `null` for providers without the
+  /// function, which `__callProvider` reports as a "missing method"
+  /// rejection; we treat that as "no schema" rather than a hard error.
+  Future<List<dynamic>?> getSettingsSchema() async {
+    try {
+      final raw = await _call('getSettings', const []);
+      final decoded = jsonDecode(raw);
+      if (decoded is List) return decoded;
+      return null;
+    } catch (e) {
+      final msg = e is JsRuntimeException ? e.message : e.toString();
+      // The bootstrap signals an absent function with this exact prefix.
+      if (msg.contains('missing method: getSettings')) return null;
+      // ignore: avoid_print
+      print('[settings] schema load failed for $sourceId: $msg');
+      return null;
+    }
+  }
 }
 
 /// Public manager. Owns the single shared QuickJS runtime + registered providers.
@@ -310,9 +365,27 @@ class ProviderManager {
   List<JsProvider> get all => _host.providers.values.toList();
   JsProvider? get(String id) => _host.providers[id];
 
-  Future<JsProvider> load({required String sourceId, required String jsSource}) async {
+  /// Loads [jsSource] under [sourceId] in the shared QuickJS runtime.
+  ///
+  /// Constraint: only one provider per [sourceId] can be active at a
+  /// time — `globalThis.__providers[sourceId]` is a single slot.
+  /// Calling [load] a second time with the same [sourceId] silently
+  /// replaces the previous definition. The Dart-side registry tracks
+  /// every installed (repo, sourceId) pair, but the runtime mirror is
+  /// one-per-id; callers swap by calling `ProviderRegistry.setRuntimeActive`.
+  Future<JsProvider> load({
+    required String sourceId,
+    required String jsSource,
+    String originRepoUrl = '',
+    String displayName = '',
+  }) async {
     await _host.loadProvider(sourceId, jsSource);
-    final provider = JsProvider._(sourceId: sourceId, host: _host);
+    final provider = JsProvider._(
+      sourceId: sourceId,
+      originRepoUrl: originRepoUrl,
+      displayName: displayName,
+      host: _host,
+    );
     _host.providers[sourceId] = provider;
     return provider;
   }
@@ -322,6 +395,12 @@ class ProviderManager {
     _host.providers.remove(id);
     _host.resetHealth(id);
   }
+
+  /// Mirrors per-source settings into the JS runtime so subsequent
+  /// provider calls can read them as `__settings[sourceId]`. Safe to
+  /// call at any time — the underlying eval is single-shot.
+  void setSettings(String sourceId, Map<String, dynamic> settings) =>
+      _host.setSettings(sourceId, settings);
 
   void resetHealth(String id) => _host.resetHealth(id);
 

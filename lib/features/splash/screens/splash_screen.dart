@@ -98,7 +98,7 @@ class _SplashScreenState extends State<SplashScreen>
     if (!onboarded) return; // first-run: no active source yet
     final activeCubit = sl<ActiveSourceCubit>();
     activeCubit.initializeIfNeeded();
-    final src = activeCubit.state;
+    final src = activeCubit.activeSourceId;
     if (src == null) return;
     final bloc = sl<HomeBloc>();
     // Idempotent: HomeSourceChanged short-circuits when the source matches and

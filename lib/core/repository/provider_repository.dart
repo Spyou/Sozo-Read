@@ -61,27 +61,37 @@ class ProviderRepository {
       _guard(() => _need(sourceId).getChapterContent(chapterUrl));
 
   // ---- registry ops ----
-  Future<Either<Failure, void>> install(String name, String url) async {
+  Future<Either<Failure, void>> install(
+    String name,
+    String url, {
+    String repoUrl = '',
+    String displayName = '',
+  }) async {
     try {
-      await _registry.install(name: name, url: url);
+      await _registry.install(
+        name: name,
+        url: url,
+        repoUrl: repoUrl,
+        displayName: displayName,
+      );
       return const Right(null);
     } catch (e) {
       return Left(_mapError(e));
     }
   }
 
-  Future<Either<Failure, void>> uninstall(String name) async {
+  Future<Either<Failure, void>> uninstall(String name, {String? repoUrl}) async {
     try {
-      await _registry.uninstall(name);
+      await _registry.uninstall(name, repoUrl: repoUrl);
       return const Right(null);
     } catch (e) {
       return Left(_mapError(e));
     }
   }
 
-  Future<Either<Failure, void>> refresh(String name) async {
+  Future<Either<Failure, void>> refresh(String name, {String? repoUrl}) async {
     try {
-      await _registry.loadIntoRuntime(name, force: true);
+      await _registry.loadIntoRuntime(name, repoUrl: repoUrl, force: true);
       return const Right(null);
     } catch (e) {
       return Left(_mapError(e));

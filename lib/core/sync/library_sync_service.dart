@@ -4,7 +4,9 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/book_item.dart';
+import '../repository/categories_repository.dart';
 import '../repository/chapter_bookmarks_repository.dart';
+import '../repository/library_categories_repository.dart';
 import '../repository/library_repository.dart';
 import '../repository/page_bookmarks_repository.dart';
 import '../repository/read_chapters_repository.dart';
@@ -44,23 +46,31 @@ class LibrarySyncService {
     required ReadChaptersRepository readChapters,
     required ChapterBookmarksRepository chapterBookmarks,
     required PageBookmarksRepository pageBookmarks,
+    required CategoriesRepository categories,
+    required LibraryCategoriesRepository libraryCategories,
     required AuthService auth,
   })  : _library = library,
         _readChapters = readChapters,
         _chapterBookmarks = chapterBookmarks,
         _pageBookmarks = pageBookmarks,
+        _categories = categories,
+        _libraryCategories = libraryCategories,
         _auth = auth;
 
   static const _table = 'library_entries';
   static const _readChaptersTable = 'read_chapters';
   static const _chapterBookmarksTable = 'chapter_bookmarks';
   static const _pageBookmarksTable = 'page_bookmarks';
+  static const _categoriesTable = 'library_categories';
+  static const _libraryCategoriesTable = 'library_entry_categories';
   static const Duration _debounce = Duration(seconds: 2);
 
   final LibraryRepository _library;
   final ReadChaptersRepository _readChapters;
   final ChapterBookmarksRepository _chapterBookmarks;
   final PageBookmarksRepository _pageBookmarks;
+  final CategoriesRepository _categories;
+  final LibraryCategoriesRepository _libraryCategories;
   final AuthService _auth;
 
   SupabaseClient? get _client {
@@ -111,6 +121,8 @@ class LibrarySyncService {
     _readChapters.onLocalWrite = _kickDebounce;
     _chapterBookmarks.onLocalWrite = _kickDebounce;
     _pageBookmarks.onLocalWrite = _kickDebounce;
+    _categories.onLocalWrite = _kickDebounce;
+    _libraryCategories.onLocalWrite = _kickDebounce;
     _authSub = _auth.authStream.listen((event) {
       if (event == AuthChangeEvent.signedIn ||
           event == AuthChangeEvent.tokenRefreshed) {
@@ -134,6 +146,8 @@ class LibrarySyncService {
     _readChapters.onLocalWrite = null;
     _chapterBookmarks.onLocalWrite = null;
     _pageBookmarks.onLocalWrite = null;
+    _categories.onLocalWrite = null;
+    _libraryCategories.onLocalWrite = null;
     _debounceTimer?.cancel();
     _debounceTimer = null;
     await _authSub?.cancel();
@@ -166,7 +180,11 @@ class LibrarySyncService {
         _chapterBookmarks.dirtyKeys().isNotEmpty ||
         _chapterBookmarks.tombstones().isNotEmpty ||
         _pageBookmarks.dirtyKeys().isNotEmpty ||
-        _pageBookmarks.tombstones().isNotEmpty;
+        _pageBookmarks.tombstones().isNotEmpty ||
+        _categories.dirtyKeys().isNotEmpty ||
+        _categories.tombstones().isNotEmpty ||
+        _libraryCategories.dirtyKeys().isNotEmpty ||
+        _libraryCategories.tombstones().isNotEmpty;
     if (hasWork) _setStatus(LibrarySyncStatus.syncing);
     try {
       await _pushDirty(client, userId);
@@ -177,6 +195,10 @@ class LibrarySyncService {
       await _pushChapterBookmarksTombstones(client, userId);
       await _pushPageBookmarksDirty(client, userId);
       await _pushPageBookmarksTombstones(client, userId);
+      await _pushCategoriesDirty(client, userId);
+      await _pushCategoriesTombstones(client, userId);
+      await _pushLibraryCategoriesDirty(client, userId);
+      await _pushLibraryCategoriesTombstones(client, userId);
       if (hasWork) _setStatus(LibrarySyncStatus.idle);
     } catch (e, st) {
       debugPrint('[sync] flush failed: $e\n$st');
@@ -469,6 +491,148 @@ class LibrarySyncService {
     await _pageBookmarks.ackTombstones(acks);
   }
 
+  // -- library_categories push --------------------------------------------
+
+  Future<void> _pushCategoriesDirty(
+    SupabaseClient client,
+    String userId,
+  ) async {
+    final dirty = _categories.dirtyKeys();
+    if (dirty.isEmpty) return;
+    final tombstones = _categories.tombstones();
+    final rows = <Map<String, dynamic>>[];
+    final pushed = <String>[];
+    for (final key in dirty.keys) {
+      if (tombstones.containsKey(key)) continue;
+      final entry = _categories.get(key);
+      if (entry == null) {
+        pushed.add(key);
+        continue;
+      }
+      rows.add({
+        'user_id': userId,
+        'id': entry.id,
+        'name': entry.name,
+        'sort_order': entry.sortOrder,
+        'updated_at': entry.updatedAt.toIso8601String(),
+      });
+      pushed.add(key);
+    }
+    if (rows.isEmpty) {
+      if (pushed.isNotEmpty) await _categories.ackDirty(pushed);
+      return;
+    }
+    debugPrint('[sync] pushing ${rows.length} library_categories rows');
+    try {
+      await client
+          .from(_categoriesTable)
+          .upsert(rows, onConflict: 'user_id,id');
+      await _categories.ackDirty(pushed);
+    } catch (e) {
+      debugPrint('[sync] library_categories upsert failed: $e');
+    }
+  }
+
+  Future<void> _pushCategoriesTombstones(
+    SupabaseClient client,
+    String userId,
+  ) async {
+    final tombstones = _categories.tombstones();
+    if (tombstones.isEmpty) return;
+    final acks = <String>[];
+    for (final key in tombstones.keys) {
+      try {
+        await client
+            .from(_categoriesTable)
+            .delete()
+            .eq('user_id', userId)
+            .eq('id', key);
+        acks.add(key);
+      } catch (e) {
+        debugPrint('[sync] library_categories delete failed for $key: $e');
+      }
+    }
+    await _categories.ackTombstones(acks);
+  }
+
+  // -- library_entry_categories push --------------------------------------
+
+  Future<void> _pushLibraryCategoriesDirty(
+    SupabaseClient client,
+    String userId,
+  ) async {
+    final dirty = _libraryCategories.dirtyKeys();
+    if (dirty.isEmpty) return;
+    final tombstones = _libraryCategories.tombstones();
+    final rows = <Map<String, dynamic>>[];
+    final pushed = <String>[];
+    for (final key in dirty.keys) {
+      if (tombstones.containsKey(key)) continue;
+      final entry = _libraryCategoryByKey(key);
+      if (entry == null) {
+        pushed.add(key);
+        continue;
+      }
+      rows.add({
+        'user_id': userId,
+        'source_id': entry.sourceId,
+        'book_id': entry.bookId,
+        'category_id': entry.categoryId,
+        'added_at': entry.addedAt.toIso8601String(),
+      });
+      pushed.add(key);
+    }
+    if (rows.isEmpty) {
+      if (pushed.isNotEmpty) await _libraryCategories.ackDirty(pushed);
+      return;
+    }
+    debugPrint(
+      '[sync] pushing ${rows.length} library_entry_categories rows',
+    );
+    try {
+      await client.from(_libraryCategoriesTable).upsert(
+            rows,
+            onConflict: 'user_id,source_id,book_id,category_id',
+          );
+      await _libraryCategories.ackDirty(pushed);
+    } catch (e) {
+      debugPrint('[sync] library_entry_categories upsert failed: $e');
+    }
+  }
+
+  Future<void> _pushLibraryCategoriesTombstones(
+    SupabaseClient client,
+    String userId,
+  ) async {
+    final tombstones = _libraryCategories.tombstones();
+    if (tombstones.isEmpty) return;
+    final acks = <String>[];
+    for (final key in tombstones.keys) {
+      // key shape: sourceId::bookId::categoryId
+      final parts = key.split('::');
+      if (parts.length < 3) {
+        acks.add(key); // malformed — drop
+        continue;
+      }
+      final sourceId = parts[0];
+      final bookId = parts[1];
+      final categoryId = parts.sublist(2).join('::');
+      try {
+        await client
+            .from(_libraryCategoriesTable)
+            .delete()
+            .eq('user_id', userId)
+            .eq('source_id', sourceId)
+            .eq('book_id', bookId)
+            .eq('category_id', categoryId);
+        acks.add(key);
+      } catch (e) {
+        debugPrint('[sync] library_entry_categories delete failed for $key: $e');
+      }
+    }
+    await _libraryCategories.ackTombstones(acks);
+  }
+
   /// Fetch every row for the current user and merge into Hive by
   /// `updated_at`. The local row wins iff its `updatedAt` is strictly
   /// newer than the cloud's (otherwise cloud wins). Tombstones with
@@ -541,6 +705,20 @@ class LibrarySyncService {
       await _pullPageBookmarks(client, userId);
     } catch (e) {
       debugPrint('[sync] pullPageBookmarks failed: $e');
+      hadError = true;
+      _setStatus(LibrarySyncStatus.error, error: e.toString());
+    }
+    try {
+      await _pullCategories(client, userId);
+    } catch (e) {
+      debugPrint('[sync] pullCategories failed: $e');
+      hadError = true;
+      _setStatus(LibrarySyncStatus.error, error: e.toString());
+    }
+    try {
+      await _pullLibraryCategories(client, userId);
+    } catch (e) {
+      debugPrint('[sync] pullLibraryCategories failed: $e');
       hadError = true;
       _setStatus(LibrarySyncStatus.error, error: e.toString());
     }
@@ -658,6 +836,83 @@ class LibrarySyncService {
     }
   }
 
+  /// Pull every `library_categories` row for the user. Last-write-wins by
+  /// `updated_at` mirroring [pullAll]'s policy on library entries.
+  Future<void> _pullCategories(SupabaseClient client, String userId) async {
+    try {
+      final rows = await client
+          .from(_categoriesTable)
+          .select()
+          .eq('user_id', userId)
+          .order('updated_at', ascending: false)
+          .limit(500);
+      debugPrint('[sync] pulled ${rows.length} library_categories rows');
+      final tombstones = _categories.tombstones();
+      final dirty = _categories.dirtyKeys();
+      for (final raw in rows) {
+        final row = Map<String, dynamic>.from(raw as Map);
+        final cloud = _categoryFromRow(row);
+        if (cloud == null) continue;
+        final key = cloud.key;
+        final tomb = tombstones[key];
+        if (tomb != null) {
+          final tombAt = DateTime.tryParse(tomb);
+          if (tombAt != null && cloud.updatedAt.isAfter(tombAt)) {
+            await _categories.ackTombstones([key]);
+          } else {
+            continue;
+          }
+        }
+        final localDirty = dirty[key];
+        if (localDirty != null) {
+          final localAt = DateTime.tryParse(localDirty);
+          if (localAt != null && localAt.isAfter(cloud.updatedAt)) continue;
+        }
+        await _categories.putFromSync(cloud);
+      }
+    } catch (e, st) {
+      debugPrint('[sync] library_categories pull failed: $e\n$st');
+    }
+  }
+
+  /// Pull every `library_entry_categories` join row. Same tombstone-vs-cloud
+  /// policy as the bookmark tables (cloud wins iff written after tombstone).
+  Future<void> _pullLibraryCategories(
+    SupabaseClient client,
+    String userId,
+  ) async {
+    try {
+      final rows = await client
+          .from(_libraryCategoriesTable)
+          .select()
+          .eq('user_id', userId)
+          .order('added_at', ascending: false)
+          .limit(2000);
+      debugPrint(
+        '[sync] pulled ${rows.length} library_entry_categories rows',
+      );
+      final tombstones = _libraryCategories.tombstones();
+      for (final raw in rows) {
+        final row = Map<String, dynamic>.from(raw as Map);
+        final cloud = _libraryCategoryFromRow(row);
+        if (cloud == null) continue;
+        final key = cloud.key;
+        final tomb = tombstones[key];
+        if (tomb != null) {
+          final tombAt = DateTime.tryParse(tomb);
+          if (tombAt != null && cloud.addedAt.isAfter(tombAt)) {
+            await _libraryCategories.ackTombstones([key]);
+          } else {
+            continue;
+          }
+        }
+        await _libraryCategories.putFromSync(cloud);
+      }
+    } catch (e, st) {
+      debugPrint('[sync] library_entry_categories pull failed: $e\n$st');
+    }
+  }
+
   /// Pull-to-refresh entry point. Pulls then immediately flushes any
   /// queued local writes.
   Future<void> refresh() async {
@@ -679,6 +934,10 @@ class LibrarySyncService {
         'updated_at': e.updatedAt.toIso8601String(),
         'last_chapter_index': e.lastChapterIndex,
         'last_chapter_progress': e.lastChapterProgress,
+        // New-chapter notification baseline. Sync so a fresh install on
+        // another device doesn't fire a flood of "new chapter" alerts
+        // for backlog the user already saw elsewhere.
+        'last_seen_chapter_count': e.lastSeenChapterCount,
       };
 
   LibraryEntry? _fromRow(Map<String, dynamic> row) {
@@ -697,6 +956,9 @@ class LibrarySyncService {
         lastChapterIndex: (row['last_chapter_index'] as int?) ?? 0,
         lastChapterProgress:
             (row['last_chapter_progress'] as num?)?.toDouble(),
+        // Tolerate older rows missing the column (pre-migration servers).
+        lastSeenChapterCount:
+            (row['last_seen_chapter_count'] as num?)?.toInt() ?? 0,
       );
     } catch (e) {
       debugPrint('[sync] failed to parse row: $e ($row)');
@@ -771,6 +1033,54 @@ class LibrarySyncService {
     // getAllForBook + filter is O(n-in-book) which is fine here.
     for (final entry in _chapterBookmarks.getAllForBook(sourceId, bookId)) {
       if (entry.chapterId == chapterId) return entry;
+    }
+    return null;
+  }
+
+  LibraryCategory? _categoryFromRow(Map<String, dynamic> row) {
+    try {
+      return LibraryCategory(
+        id: row['id'] as String,
+        name: row['name'] as String,
+        sortOrder: (row['sort_order'] as num?)?.toInt() ?? 0,
+        updatedAt: DateTime.parse(row['updated_at'] as String),
+      );
+    } catch (e) {
+      debugPrint('[sync] failed to parse library_categories row: $e ($row)');
+      return null;
+    }
+  }
+
+  LibraryEntryCategory? _libraryCategoryFromRow(Map<String, dynamic> row) {
+    try {
+      return LibraryEntryCategory(
+        sourceId: row['source_id'] as String,
+        bookId: row['book_id'] as String,
+        categoryId: row['category_id'] as String,
+        addedAt: DateTime.parse(row['added_at'] as String),
+      );
+    } catch (e) {
+      debugPrint(
+        '[sync] failed to parse library_entry_categories row: $e ($row)',
+      );
+      return null;
+    }
+  }
+
+  /// Reconstruct a [LibraryEntryCategory] from a dirty-queue key by
+  /// looking up the current Hive row.
+  LibraryEntryCategory? _libraryCategoryByKey(String key) {
+    final parts = key.split('::');
+    if (parts.length < 3) return null;
+    final sourceId = parts[0];
+    final bookId = parts[1];
+    final categoryId = parts.sublist(2).join('::');
+    for (final entry in _libraryCategories.getAll()) {
+      if (entry.sourceId == sourceId &&
+          entry.bookId == bookId &&
+          entry.categoryId == categoryId) {
+        return entry;
+      }
     }
     return null;
   }

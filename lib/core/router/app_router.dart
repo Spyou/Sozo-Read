@@ -23,12 +23,14 @@ import '../../features/settings/screens/appearance_settings_screen.dart';
 import '../../features/settings/screens/changelog_screen.dart';
 import '../../features/settings/screens/developers_settings_screen.dart';
 import '../../features/settings/screens/reading_settings_screen.dart';
+import '../../features/settings/screens/security_settings_screen.dart';
 import '../../features/settings/screens/settings_screen.dart';
 import '../../features/settings/screens/storage_settings_screen.dart';
 import '../../features/settings/screens/trackers_settings_screen.dart';
 import '../di/injection.dart';
 import '../trackers/anilist/anilist_tracker.dart';
 import '../trackers/mal/mal_tracker.dart';
+import '../../features/sources/screens/source_settings_screen.dart';
 import '../../features/sources/screens/sources_screen.dart';
 import '../../features/splash/screens/splash_screen.dart';
 import '../models/book_detail.dart';
@@ -174,6 +176,23 @@ GoRouter buildRouter() {
         builder: (_, _) => const SourcesScreen(),
       ),
       GoRoute(
+        // The composite `(repoUrl, sourceId)` key can't fit in the
+        // path because `repoUrl` contains slashes — pass it via query
+        // params instead. `extra` would work too but query lets the
+        // route survive deep-linking later if needed.
+        path: '/sources/:sourceId/settings',
+        name: 'source-settings',
+        builder: (_, state) {
+          final repoUrl = state.uri.queryParameters['repoUrl'] ?? '';
+          final displayName = state.uri.queryParameters['displayName'];
+          return SourceSettingsScreen(
+            sourceId: state.pathParameters['sourceId']!,
+            repoUrl: repoUrl,
+            displayName: displayName,
+          );
+        },
+      ),
+      GoRoute(
         path: '/history',
         name: 'history',
         builder: (_, _) => const HistoryScreen(),
@@ -243,6 +262,11 @@ GoRouter buildRouter() {
         path: '/settings/trackers',
         name: 'settings-trackers',
         builder: (_, _) => const TrackersSettingsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/security',
+        name: 'settings-security',
+        builder: (_, _) => const SecuritySettingsScreen(),
       ),
       GoRoute(
         path: '/detail/:sourceId/:bookId',

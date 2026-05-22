@@ -492,7 +492,7 @@ class _Thumb extends StatelessWidget {
         borderRadius: BorderRadius.circular(4),
         child: src != null
             ? CachedNetworkImage(
-                cacheManager: appImageCacheManager,
+                cacheManager: sozoCacheManagerFor(context),
                 imageUrl: src,
                 fit: BoxFit.cover,
                 placeholder: (_, _) => Container(color: AppColors.card),

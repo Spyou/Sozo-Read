@@ -151,7 +151,7 @@ class _HistoryRow extends StatelessWidget {
                 height: 64,
                 child: book.cover != null
                     ? CachedNetworkImage(
-                        cacheManager: appImageCacheManager,
+                        cacheManager: sozoCacheManagerFor(context),
                         imageUrl: book.cover!,
                         httpHeaders: book.coverHeaders,
                         fit: BoxFit.cover,

@@ -212,7 +212,7 @@ class _GithubAvatar extends StatelessWidget {
     );
     return ClipOval(
       child: CachedNetworkImage(
-        cacheManager: appImageCacheManager,
+        cacheManager: sozoCacheManagerFor(context),
         imageUrl: url,
         width: size,
         height: size,

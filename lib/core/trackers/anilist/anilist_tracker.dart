@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../di/injection.dart';
+import '../../state/incognito_cubit.dart';
 import '../tracker.dart';
 import '../tracker_entry.dart';
 import 'anilist_api.dart';
@@ -114,13 +116,18 @@ class AniListTracker implements Tracker {
     int? progress,
     TrackerStatus? status,
     double? score,
-  }) =>
-      api.saveMediaListEntry(
-        mediaId: remoteId,
-        progress: progress,
-        status: status,
-        score: score,
-      );
+  }) async {
+    // Incognito: drop the push entirely. Status/score changes are
+    // bundled in the same call by the repository, so we skip the whole
+    // round-trip rather than try to filter just `progress`.
+    if (sl<IncognitoCubit>().state) return;
+    await api.saveMediaListEntry(
+      mediaId: remoteId,
+      progress: progress,
+      status: status,
+      score: score,
+    );
+  }
 
   @override
   Future<TrackerEntry?> fetchEntry(int remoteId) =>

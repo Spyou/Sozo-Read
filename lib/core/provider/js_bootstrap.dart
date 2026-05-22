@@ -7,6 +7,10 @@ const String kJsBootstrap = r'''
 var __pendingFetches = {};
 var __fetchSeq = 0;
 globalThis.__providers = globalThis.__providers || {};
+// Per-source user settings. Populated from Dart via `setSettings`
+// and read by providers as `__settings[__SOURCE_ID]` inside their
+// wrapped closure. Empty object = "use defaults".
+globalThis.__settings = globalThis.__settings || {};
 
 function __nextFetchId() {
   __fetchSeq += 1;
@@ -166,7 +170,10 @@ String wrapProviderSource(String sourceId, String providerJs) {
     getDetail:         typeof getDetail === 'function' ? getDetail : null,
     getChapters:       typeof getChapters === 'function' ? getChapters : null,
     getPages:          typeof getPages === 'function' ? getPages : null,
-    getChapterContent: typeof getChapterContent === 'function' ? getChapterContent : null
+    getChapterContent: typeof getChapterContent === 'function' ? getChapterContent : null,
+    // Optional. Providers that omit this stay fully compatible — the
+    // Dart side detects the null slot and skips settings UI entirely.
+    getSettings:       typeof getSettings === 'function' ? getSettings : null
   };
 })();
 ''';
