@@ -435,11 +435,18 @@ class _ReaderViewState extends State<_ReaderView>
       final current = state.pageIndex;
       // PageView with `reverse: true` already maps page index 0..N to RTL
       // reading order, so "next in reading order" is always `current + 1`.
-      final target = (current + (forward ? 1 : -1))
+      // In spread mode pages move two at a time so the slot index
+      // advances by one but the canonical page index advances by two.
+      final spread = _shouldSpread(
+        context,
+        context.read<MangaPrefsCubit>().state.doublePageMode,
+      );
+      final pageStep = (spread ? 2 : 1) * (forward ? 1 : -1);
+      final target = (current + pageStep)
           .clamp(0, state.pages.length - 1);
       if (target == current) return;
       _pageController.animateToPage(
-        target,
+        spread ? target ~/ 2 : target,
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOut,
       );
@@ -476,8 +483,14 @@ class _ReaderViewState extends State<_ReaderView>
       }
     } else {
       if (_pageController.hasClients) {
+        // PageView's index space is pair-aligned when spread is on —
+        // map the target page to its containing pair.
+        final spread = _shouldSpread(
+          context,
+          context.read<MangaPrefsCubit>().state.doublePageMode,
+        );
         _pageController.animateToPage(
-          clamped,
+          spread ? clamped ~/ 2 : clamped,
           duration: const Duration(milliseconds: 220),
           curve: Curves.easeOut,
         );
@@ -749,7 +762,15 @@ class _ReaderViewState extends State<_ReaderView>
                             0,
                             state.pages.length - 1,
                           );
-                  _pageController.jumpToPage(target);
+                  // PageView's index space is pair-aligned when the
+                  // spread is on; translate the canonical page to its
+                  // slot.
+                  final spread = _shouldSpread(
+                    context,
+                    context.read<MangaPrefsCubit>().state.doublePageMode,
+                  );
+                  _pageController
+                      .jumpToPage(spread ? target ~/ 2 : target);
                 }
               }
               ctx
@@ -1533,6 +1554,24 @@ class _PageContent extends StatelessWidget {
   }
 }
 
+/// True when the user's `doublePageMode` preference should activate
+/// the two-page spread. `auto` triggers in landscape OR on a tablet
+/// (shortestSide >= 600dp). `single` is always false; `dual` is
+/// always true.
+bool _shouldSpread(BuildContext context, MangaDoublePageMode mode) {
+  switch (mode) {
+    case MangaDoublePageMode.single:
+      return false;
+    case MangaDoublePageMode.dual:
+      return true;
+    case MangaDoublePageMode.auto:
+      final mq = MediaQuery.of(context);
+      final isLandscape = mq.orientation == Orientation.landscape;
+      final isTablet = mq.size.shortestSide >= 600;
+      return isLandscape || isTablet;
+  }
+}
+
 /// Resolves the user's `MangaFitMode` preference into a concrete
 /// [BoxFit]. `fitHeight` inside a lazy ListView (vertical reader)
 /// breaks layout, so we silently fall back to `fitWidth` there — the
@@ -1695,16 +1734,38 @@ class _HorizontalReader extends StatelessWidget {
   final String? nextChapterTitle;
   final VoidCallback? onOpenNextChapter;
 
+  PageImage _pageImageAt(int i, BoxFit fit) {
+    final book = state.book;
+    final chapter = (book != null &&
+            state.chapterIndex >= 0 &&
+            state.chapterIndex < book.chapters.length)
+        ? book.chapters[state.chapterIndex]
+        : null;
+    return PageImage(
+      page: state.pages[i],
+      sourceId: book?.sourceId ?? '',
+      bookId: book?.id ?? '',
+      chapterId: chapter?.id ?? '',
+      bookTitle: book?.title,
+      chapterTitle: chapter?.title,
+      pageIndex: i,
+      fit: fit,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
-    final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
-    final fit = _resolveFit(
-      context.watch<MangaPrefsCubit>().state.fitMode,
-      isVertical: false,
-    );
+    final prefs = context.watch<MangaPrefsCubit>().state;
+    final fit = _resolveFit(prefs.fitMode, isVertical: false);
+    final spread = _shouldSpread(context, prefs.doublePageMode);
     final pageCount = state.pages.length;
-    final itemCount = hasNextChapter ? pageCount + 1 : pageCount;
+    // When spread is on the PageView's index space is PAIR indices —
+    // pair p shows pages [p*2, p*2+1] (the last pair may be a solo
+    // page if pageCount is odd). Otherwise the index space stays
+    // 1:1 with pages.
+    final slotCount = spread ? (pageCount + 1) ~/ 2 : pageCount;
+    final itemCount = hasNextChapter ? slotCount + 1 : slotCount;
     return Stack(
       children: [
         PageView.builder(
@@ -1712,82 +1773,57 @@ class _HorizontalReader extends StatelessWidget {
           itemCount: itemCount,
           reverse: state.direction == ReadingDirection.rtl,
           onPageChanged: (i) {
-            // Clamp page-change events to actual page range so the bloc
-            // doesn't get a phantom pageIndex pointing at the trailing card.
-            final clamped = i.clamp(0, pageCount - 1);
+            // In spread mode each slot represents two pages; report
+            // the LEFT page (lower index) as the canonical page so the
+            // bloc's last-read math + chapter advance stay correct.
+            final pageIdx = spread ? i * 2 : i;
+            final clamped = pageIdx.clamp(0, pageCount - 1);
             context
                 .read<MangaReaderBloc>()
                 .add(MangaReaderPageChanged(clamped));
           },
-          itemBuilder: (_, i) {
-            if (i >= pageCount) {
+          itemBuilder: (_, slot) {
+            if (slot >= slotCount) {
               return _NextChapterCard(
                 title: nextChapterTitle ?? '',
                 onOpen: onOpenNextChapter,
               );
             }
-            // Two-page spread when landscape — pair page i with page i+1
-            // if available, else show page i alone.
-            if (isLandscape && i + 1 < pageCount) {
+            if (spread) {
+              final left = slot * 2;
+              final right = left + 1;
+              final hasRight = right < pageCount;
               return InteractiveViewer(
                 transformationController: transform,
                 minScale: 1,
                 maxScale: 4,
                 panEnabled: true,
                 child: Row(
+                  // RTL: PageView already flips swipe direction via
+                  // `reverse: true`. Inside each pair, flip the visual
+                  // order too so the right page (lower-numbered) sits
+                  // on the right.
+                  textDirection: state.direction == ReadingDirection.rtl
+                      ? TextDirection.rtl
+                      : TextDirection.ltr,
                   children: [
                     Expanded(
                       child: Center(
-                        child: PageImage(
-                          page: state.pages[i],
-                          sourceId: state.book?.sourceId ?? '',
-                          bookId: state.book?.id ?? '',
-                          chapterId: (state.book != null &&
-                                  state.chapterIndex >= 0 &&
-                                  state.chapterIndex <
-                                      state.book!.chapters.length)
-                              ? state.book!
-                                  .chapters[state.chapterIndex].id
-                              : '',
-                          bookTitle: state.book?.title,
-                          chapterTitle: (state.book != null &&
-                                  state.chapterIndex >= 0 &&
-                                  state.chapterIndex <
-                                      state.book!.chapters.length)
-                              ? state.book!
-                                  .chapters[state.chapterIndex].title
-                              : null,
-                          pageIndex: i,
-                          fit: fit,
-                        ),
+                        child: _pageImageAt(left, fit),
                       ),
                     ),
-                    Expanded(
-                      child: Center(
-                        child: PageImage(
-                          page: state.pages[i + 1],
-                          sourceId: state.book?.sourceId ?? '',
-                          bookId: state.book?.id ?? '',
-                          chapterId: (state.book != null &&
-                                  state.chapterIndex >= 0 &&
-                                  state.chapterIndex <
-                                      state.book!.chapters.length)
-                              ? state.book!
-                                  .chapters[state.chapterIndex].id
-                              : '',
-                          bookTitle: state.book?.title,
-                          chapterTitle: (state.book != null &&
-                                  state.chapterIndex >= 0 &&
-                                  state.chapterIndex <
-                                      state.book!.chapters.length)
-                              ? state.book!
-                                  .chapters[state.chapterIndex].title
-                              : null,
-                          pageIndex: i + 1,
-                          fit: fit,
+                    if (hasRight)
+                      Expanded(
+                        child: Center(
+                          child: _pageImageAt(right, fit),
                         ),
-                      ),
-                    ),
+                      )
+                    else
+                      // Solo trailing page: keep equal column width so
+                      // the lone page doesn't expand to fill the screen
+                      // (would look inconsistent against neighbour
+                      // pairs).
+                      const Expanded(child: SizedBox()),
                   ],
                 ),
               );
@@ -1798,26 +1834,7 @@ class _HorizontalReader extends StatelessWidget {
               maxScale: 4,
               panEnabled: true,
               child: Center(
-                child: PageImage(
-                  page: state.pages[i],
-                  sourceId: state.book?.sourceId ?? '',
-                  bookId: state.book?.id ?? '',
-                  chapterId: (state.book != null &&
-                          state.chapterIndex >= 0 &&
-                          state.chapterIndex <
-                              state.book!.chapters.length)
-                      ? state.book!.chapters[state.chapterIndex].id
-                      : '',
-                  bookTitle: state.book?.title,
-                  chapterTitle: (state.book != null &&
-                          state.chapterIndex >= 0 &&
-                          state.chapterIndex <
-                              state.book!.chapters.length)
-                      ? state.book!.chapters[state.chapterIndex].title
-                      : null,
-                  pageIndex: i,
-                  fit: fit,
-                ),
+                child: _pageImageAt(slot, fit),
               ),
             );
           },

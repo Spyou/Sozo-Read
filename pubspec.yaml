@@ -34,6 +34,12 @@ dependencies:
 
   # Images
   cached_network_image: ^3.4.1
+
+  # Curated Google Fonts pickable per-book in the novel reader.
+  # `google_fonts` lazily fetches the font file on first use and
+  # caches it on disk; subsequent reads (cold or hot) come from the
+  # local cache.
+  google_fonts: ^6.2.1
   # Direct dep on the cache backend so we can swap in a size-capped
   # custom CacheManager (`AppImageCacheManager`) in place of
   # `DefaultCacheManager`. cached_network_image already pulls this in

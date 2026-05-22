@@ -92,8 +92,9 @@ Future<void> openFontFamilySheet(BuildContext context, String current) async {
               ListTile(
                 title: Text(
                   f,
-                  style: TextStyle(
-                    fontFamily: NovelPrefsCubit.resolveFamily(f),
+                  style: NovelPrefsCubit.applyFontLabel(
+                    f,
+                    const TextStyle(),
                   ),
                 ),
                 trailing: f == current
@@ -275,6 +276,44 @@ Future<void> openMangaImageQualitySheet(
   );
 }
 
+Future<void> openMangaDoublePageModeSheet(
+  BuildContext context,
+  MangaDoublePageMode current,
+) async {
+  final cubit = context.read<MangaPrefsCubit>();
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (ctx) {
+      return SettingsSheetShell(
+        title: 'Double page',
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final entry in const [
+              (MangaDoublePageMode.auto, Icons.auto_awesome_rounded),
+              (MangaDoublePageMode.single, Icons.crop_portrait_rounded),
+              (MangaDoublePageMode.dual, Icons.menu_book_rounded),
+            ])
+              ListTile(
+                leading: Icon(entry.$2),
+                title: Text(doublePageModeLabel(entry.$1)),
+                trailing: entry.$1 == current
+                    ? Icon(Icons.check,
+                        color: Theme.of(ctx).colorScheme.primary)
+                    : null,
+                onTap: () {
+                  cubit.setDoublePageMode(entry.$1);
+                  Navigator.pop(ctx);
+                },
+              ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
 Future<void> openMangaFitModeSheet(
   BuildContext context,
   MangaFitMode current, {
@@ -445,6 +484,17 @@ String imageQualityLabel(MangaImageQuality q) {
       return 'High';
     case MangaImageQuality.low:
       return 'Low';
+  }
+}
+
+String doublePageModeLabel(MangaDoublePageMode m) {
+  switch (m) {
+    case MangaDoublePageMode.auto:
+      return 'Auto (landscape / tablet)';
+    case MangaDoublePageMode.single:
+      return 'Single page';
+    case MangaDoublePageMode.dual:
+      return 'Two pages';
   }
 }
 

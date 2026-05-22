@@ -16,6 +16,7 @@ import '../repository/page_bookmarks_repository.dart';
 import '../repository/provider_repository.dart';
 import '../repository/read_chapters_repository.dart';
 import '../repository/tracker_repository.dart';
+import '../repository/dictionary_repository.dart';
 import '../services/changelog_service.dart';
 import '../services/chapter_check_service.dart';
 import '../services/download_notification_service.dart';
@@ -118,6 +119,11 @@ Future<void> configureDependencies() async {
   // What's new sheet (post version-bump) and /settings/changelog.
   sl.registerLazySingleton<ChangelogService>(
     () => ChangelogService(dio: sl(), boxName: 'settings'),
+  );
+  // Word definitions for the novel reader's long-press lookup. The
+  // backing Hive cache is opened in app_bootstrap.dart.
+  sl.registerLazySingleton<DictionaryRepository>(
+    () => DictionaryRepository(dio: sl()),
   );
   sl.registerLazySingleton<DownloadNotificationService>(
     () => DownloadNotificationService(

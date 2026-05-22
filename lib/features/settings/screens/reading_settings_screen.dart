@@ -113,6 +113,21 @@ class ReadingSettingsScreen extends StatelessWidget {
                               MangaReadingDirection.vertical,
                         ),
                       ),
+                      // Double-page spread is meaningless in vertical mode
+                      // (webtoon stacks pages); hide the tile entirely
+                      // there so the user can't set a pref that goes
+                      // silently ignored.
+                      if (m.readingDirection !=
+                          MangaReadingDirection.vertical)
+                        SettingsTile(
+                          icon: Icons.menu_book_rounded,
+                          title: 'Double page',
+                          subtitle: doublePageModeLabel(m.doublePageMode),
+                          onTap: () => openMangaDoublePageModeSheet(
+                            context,
+                            m.doublePageMode,
+                          ),
+                        ),
                       SettingsTile(
                         icon: Icons.screen_rotation_rounded,
                         title: 'Lock orientation',

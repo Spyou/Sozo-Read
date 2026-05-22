@@ -14,6 +14,7 @@ import 'provider/provider_registry.dart';
 import 'provider/provider_repo_registry.dart';
 import 'repository/book_detail_cache.dart';
 import 'repository/chapter_bookmarks_repository.dart';
+import 'repository/dictionary_repository.dart';
 import 'repository/chapter_thumbnails_repository.dart';
 import 'repository/downloads_repository.dart';
 import 'repository/library_repository.dart';
@@ -65,6 +66,7 @@ class AppBootstrap {
     await PageBookmarksRepository.init();
     await ChapterThumbnailsRepository.init();
     await NotificationsRepository.init();
+    await DictionaryRepository.init();
     await BookDetailCache.init();
     await TrackerRepository.init();
     await ActiveSourceCubit.init();

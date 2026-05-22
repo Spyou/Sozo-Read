@@ -34,6 +34,13 @@ enum MangaImageQuality { auto, high, low }
 /// break).
 enum MangaFitMode { fitWidth, fitHeight, fitScreen }
 
+/// Two-page spread mode for the horizontal/paged reader. `auto` turns
+/// the spread on when the device is in landscape OR is a tablet
+/// (`MediaQuery.shortestSide >= 600`); the other two force on/off.
+/// Has no effect in vertical/webtoon mode — the picker is disabled
+/// there.
+enum MangaDoublePageMode { auto, single, dual }
+
 /// Orientation lock preference for the manga reader screen.
 enum MangaOrientationLock { auto, portrait, landscape }
 
@@ -49,6 +56,7 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
   static const String _kAutoScroll = 'manga.auto_scroll';
   static const String _kImageQuality = 'manga.image_quality';
   static const String _kFitMode = 'manga.fit_mode';
+  static const String _kDoublePageMode = 'manga.double_page_mode';
   static const String _kOrientationLock = 'manga.orientation_lock';
   static const String _kKeepScreenOn = 'manga.keep_screen_on';
   static const String _kTapZoneNavigation = 'manga.tap_zone_navigation';
@@ -75,6 +83,8 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
   static const MangaAutoScroll defaultAutoScroll = MangaAutoScroll.off;
   static const MangaImageQuality defaultImageQuality = MangaImageQuality.auto;
   static const MangaFitMode defaultFitMode = MangaFitMode.fitScreen;
+  static const MangaDoublePageMode defaultDoublePageMode =
+      MangaDoublePageMode.auto;
   static const MangaOrientationLock defaultOrientationLock =
       MangaOrientationLock.auto;
   static const bool defaultKeepScreenOn = true;
@@ -96,6 +106,8 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
       autoScroll: _readAutoScroll(_box.get(_kAutoScroll) as String?),
       imageQuality: _readImageQuality(_box.get(_kImageQuality) as String?),
       fitMode: _readFitMode(_box.get(_kFitMode) as String?),
+      doublePageMode:
+          _readDoublePageMode(_box.get(_kDoublePageMode) as String?),
       orientationLock:
           _readOrientationLock(_box.get(_kOrientationLock) as String?),
       keepScreenOn: (_box.get(_kKeepScreenOn) as bool?) ?? defaultKeepScreenOn,
@@ -164,6 +176,14 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
     );
   }
 
+  static MangaDoublePageMode _readDoublePageMode(String? raw) {
+    if (raw == null) return defaultDoublePageMode;
+    return MangaDoublePageMode.values.firstWhere(
+      (v) => v.name == raw,
+      orElse: () => defaultDoublePageMode,
+    );
+  }
+
   static MangaOrientationLock _readOrientationLock(String? raw) {
     if (raw == null) return defaultOrientationLock;
     return MangaOrientationLock.values.firstWhere(
@@ -218,6 +238,12 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
     if (v == state.fitMode) return;
     _box.put(_kFitMode, v.name);
     emit(state.copyWith(fitMode: v));
+  }
+
+  void setDoublePageMode(MangaDoublePageMode v) {
+    if (v == state.doublePageMode) return;
+    _box.put(_kDoublePageMode, v.name);
+    emit(state.copyWith(doublePageMode: v));
   }
 
   void setOrientationLock(MangaOrientationLock v) {
@@ -299,6 +325,7 @@ class MangaPrefs extends Equatable {
         MangaPrefsCubit.defaultShowFloatingAutoScroll,
     this.autoScrollEnabledBooks = const <String>{},
     this.fitMode = MangaPrefsCubit.defaultFitMode,
+    this.doublePageMode = MangaPrefsCubit.defaultDoublePageMode,
     this.downloadsWifiOnly = MangaPrefsCubit.defaultDownloadsWifiOnly,
   });
 
@@ -330,6 +357,10 @@ class MangaPrefs extends Equatable {
   /// vertical-mode fall-back behavior.
   final MangaFitMode fitMode;
 
+  /// Two-page spread mode for horizontal/paged reading. See
+  /// [MangaDoublePageMode] for the auto-detection rules.
+  final MangaDoublePageMode doublePageMode;
+
   /// When true, the downloads worker pool refuses to start a chapter
   /// transfer unless the current network link is WiFi. Jobs picked up
   /// off-WiFi flip to `paused` with a "Waiting for WiFi" note and resume
@@ -349,6 +380,7 @@ class MangaPrefs extends Equatable {
     bool? showFloatingAutoScroll,
     Set<String>? autoScrollEnabledBooks,
     MangaFitMode? fitMode,
+    MangaDoublePageMode? doublePageMode,
     bool? downloadsWifiOnly,
   }) =>
       MangaPrefs(
@@ -366,6 +398,7 @@ class MangaPrefs extends Equatable {
         autoScrollEnabledBooks:
             autoScrollEnabledBooks ?? this.autoScrollEnabledBooks,
         fitMode: fitMode ?? this.fitMode,
+        doublePageMode: doublePageMode ?? this.doublePageMode,
         downloadsWifiOnly: downloadsWifiOnly ?? this.downloadsWifiOnly,
       );
 
@@ -383,6 +416,7 @@ class MangaPrefs extends Equatable {
         showFloatingAutoScroll,
         autoScrollEnabledBooks,
         fitMode,
+        doublePageMode,
         downloadsWifiOnly,
       ];
 }

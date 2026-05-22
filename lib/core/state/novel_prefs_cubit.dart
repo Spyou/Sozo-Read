@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:hive/hive.dart';
 
 /// Reading background mode applied to the manga (vertical) and novel readers.
@@ -20,6 +21,17 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
   /// `sourceId::bookId` → `ReadingBgMode.name`. Absent keys fall back to
   /// the global [_kBg].
   static const String _kPerBookBg = 'novel.per_book_bg';
+  /// Per-book font override. Stored as a `Map<String,String>` of
+  /// `sourceId::bookId` → font label (must be in [familyOptions]).
+  static const String _kPerBookFontFamily = 'novel.per_book_font_family';
+  /// Auto-scroll opt-in set + speed slider + floating-control
+  /// visibility. Mirrors the manga reader's pattern. Speed is global,
+  /// per-book on/off, floating control is global.
+  static const String _kAutoScrollEnabledBooks =
+      'novel.auto_scroll_enabled_books';
+  static const String _kAutoScrollSpeed = 'novel.auto_scroll_speed';
+  static const String _kShowFloatingAutoScroll =
+      'novel.show_floating_auto_scroll';
   static const String _kVolumeButtons = 'reader.volume_buttons';
 
   static const double defaultFontSize = 16;
@@ -28,30 +40,92 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
   static const String defaultFontFamily = 'System';
   static const ReadingBgMode defaultBackgroundMode = ReadingBgMode.system;
   static const bool defaultUseVolumeButtons = true;
+  /// Auto-scroll speed in `[0..1]`. Mapped to px/sec at runtime
+  /// (novels are slower than manga panels — see the reader).
+  static const double defaultAutoScrollSpeed = 0.33;
+  static const bool defaultShowFloatingAutoScroll = true;
 
-  /// Available font-family options shown in the picker. The string here is
-  /// the user-facing label; map to a real family via [resolveFamily].
+  /// Available font-family labels shown in the picker. System families
+  /// come first (they're free — no download); the Google Fonts entries
+  /// fetch on first use and cache to disk thereafter. Stored in the
+  /// `fontFamily` field by label.
   static const List<String> familyOptions = [
     'System',
     'Serif',
     'Sans-serif',
     'Monospace',
+    // Google Fonts — readable serifs and sans-serifs commonly used
+    // for long-form reading. Add more here as needed; the resolver
+    // matches by label.
+    'Inter',
+    'Lora',
+    'Merriweather',
+    'Source Sans 3',
+    'EB Garamond',
+    'Noto Sans',
+    'Noto Serif',
+    'Roboto Mono',
   ];
 
-  /// Maps the symbolic family label to a Flutter `fontFamily` string (or
-  /// null for the platform default).
-  static String? resolveFamily(String label) {
+  /// Google-Font labels (must match a `GoogleFonts.<method>()` name).
+  static const Set<String> _googleFontLabels = {
+    'Inter',
+    'Lora',
+    'Merriweather',
+    'Source Sans 3',
+    'EB Garamond',
+    'Noto Sans',
+    'Noto Serif',
+    'Roboto Mono',
+  };
+
+  /// Resolves a font label into a [TextStyle] applied on top of [base].
+  /// System labels return the base with a `fontFamily:` override; Google
+  /// Font labels return `GoogleFonts.getFont(...)` which downloads the
+  /// font on first use and caches it locally.
+  static TextStyle applyFontLabel(String label, TextStyle base) {
+    if (_googleFontLabels.contains(label)) {
+      try {
+        return GoogleFonts.getFont(label, textStyle: base);
+      } catch (_) {
+        return base;
+      }
+    }
     switch (label) {
       case 'Serif':
-        return 'serif';
+        return base.copyWith(fontFamily: 'serif');
       case 'Sans-serif':
-        return 'sans-serif';
+        return base.copyWith(fontFamily: 'sans-serif');
       case 'Monospace':
-        return 'monospace';
+        return base.copyWith(fontFamily: 'monospace');
       case 'System':
       default:
-        return null;
+        return base;
     }
+  }
+
+  /// Returns the effective font label for a given book: per-book
+  /// override if set, else the global default.
+  String resolveFontFor(String sourceId, String bookId) {
+    final override = state.perBookFontFamily[bookKey(sourceId, bookId)];
+    return override ?? state.fontFamily;
+  }
+
+  /// Set or clear the per-book font override. Pass `null` to drop the
+  /// override and fall back to the global font.
+  void setFontForBook(String sourceId, String bookId, String? label) {
+    if (label != null && !familyOptions.contains(label)) return;
+    final key = bookKey(sourceId, bookId);
+    final next = Map<String, String>.from(state.perBookFontFamily);
+    if (label == null) {
+      if (!next.containsKey(key)) return;
+      next.remove(key);
+    } else {
+      if (next[key] == label) return;
+      next[key] = label;
+    }
+    _box.put(_kPerBookFontFamily, next);
+    emit(state.copyWith(perBookFontFamily: next));
   }
 
   static Box get _box => Hive.box(_boxName);
@@ -68,6 +142,15 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
       fontFamily: (_box.get(_kFontFamily) as String?) ?? defaultFontFamily,
       backgroundMode: _readBg(_box.get(_kBg) as String?),
       perBookBackgroundMode: _readPerBookBg(),
+      perBookFontFamily: _readPerBookFont(),
+      autoScrollEnabledBooks: _readAutoScrollEnabledBooks(),
+      autoScrollSpeed:
+          ((_box.get(_kAutoScrollSpeed) as num?)?.toDouble() ??
+                  defaultAutoScrollSpeed)
+              .clamp(0.0, 1.0),
+      showFloatingAutoScroll:
+          (_box.get(_kShowFloatingAutoScroll) as bool?) ??
+              defaultShowFloatingAutoScroll,
       useVolumeButtons:
           (_box.get(_kVolumeButtons) as bool?) ?? defaultUseVolumeButtons,
     );
@@ -81,6 +164,22 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
       );
     }
     return const <String, String>{};
+  }
+
+  static Map<String, String> _readPerBookFont() {
+    final raw = _box.get(_kPerBookFontFamily);
+    if (raw is Map) {
+      return raw.map(
+        (k, v) => MapEntry(k.toString(), v.toString()),
+      );
+    }
+    return const <String, String>{};
+  }
+
+  static Set<String> _readAutoScrollEnabledBooks() {
+    final raw = _box.get(_kAutoScrollEnabledBooks);
+    if (raw is List) return raw.whereType<String>().toSet();
+    return <String>{};
   }
 
   static ReadingBgMode _readBg(String? raw) {
@@ -113,6 +212,7 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
 
   void setFontFamily(String label) {
     if (!familyOptions.contains(label)) return;
+    if (label == state.fontFamily) return;
     _box.put(_kFontFamily, label);
     emit(state.copyWith(fontFamily: label));
   }
@@ -157,6 +257,37 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
     _box.put(_kVolumeButtons, v);
     emit(state.copyWith(useVolumeButtons: v));
   }
+
+  bool isAutoScrollEnabledFor(String sourceId, String bookId) =>
+      state.autoScrollEnabledBooks.contains(bookKey(sourceId, bookId));
+
+  void setAutoScrollForBook(String sourceId, String bookId, bool enabled) {
+    final key = bookKey(sourceId, bookId);
+    final current = state.autoScrollEnabledBooks;
+    if (enabled && current.contains(key)) return;
+    if (!enabled && !current.contains(key)) return;
+    final next = Set<String>.from(current);
+    if (enabled) {
+      next.add(key);
+    } else {
+      next.remove(key);
+    }
+    _box.put(_kAutoScrollEnabledBooks, next.toList());
+    emit(state.copyWith(autoScrollEnabledBooks: next));
+  }
+
+  void setAutoScrollSpeed(double v) {
+    final clamped = v.clamp(0.0, 1.0);
+    if (clamped == state.autoScrollSpeed) return;
+    _box.put(_kAutoScrollSpeed, clamped);
+    emit(state.copyWith(autoScrollSpeed: clamped));
+  }
+
+  void setShowFloatingAutoScroll(bool v) {
+    if (v == state.showFloatingAutoScroll) return;
+    _box.put(_kShowFloatingAutoScroll, v);
+    emit(state.copyWith(showFloatingAutoScroll: v));
+  }
 }
 
 @immutable
@@ -169,6 +300,11 @@ class NovelPrefs {
     required this.backgroundMode,
     required this.useVolumeButtons,
     this.perBookBackgroundMode = const <String, String>{},
+    this.perBookFontFamily = const <String, String>{},
+    this.autoScrollEnabledBooks = const <String>{},
+    this.autoScrollSpeed = NovelPrefsCubit.defaultAutoScrollSpeed,
+    this.showFloatingAutoScroll =
+        NovelPrefsCubit.defaultShowFloatingAutoScroll,
   });
 
   final double fontSize;
@@ -183,6 +319,22 @@ class NovelPrefs {
   /// [NovelPrefsCubit.resolveBackgroundFor].
   final Map<String, String> perBookBackgroundMode;
 
+  /// Per-book font override map. Key = `sourceId::bookId`, value =
+  /// font label (must be in [NovelPrefsCubit.familyOptions]).
+  final Map<String, String> perBookFontFamily;
+
+  /// Books (keyed `sourceId::bookId`) the user has explicitly opted
+  /// into auto-scroll on. Absent = off.
+  final Set<String> autoScrollEnabledBooks;
+
+  /// Continuous 0..1 auto-scroll speed. Mapped to px/sec at runtime
+  /// (novels are slower than manga panels — see the reader).
+  final double autoScrollSpeed;
+
+  /// Whether the draggable floating control shows in the reader when
+  /// auto-scroll is enabled.
+  final bool showFloatingAutoScroll;
+
   NovelPrefs copyWith({
     double? fontSize,
     double? lineHeight,
@@ -190,6 +342,10 @@ class NovelPrefs {
     String? fontFamily,
     ReadingBgMode? backgroundMode,
     Map<String, String>? perBookBackgroundMode,
+    Map<String, String>? perBookFontFamily,
+    Set<String>? autoScrollEnabledBooks,
+    double? autoScrollSpeed,
+    bool? showFloatingAutoScroll,
     bool? useVolumeButtons,
   }) =>
       NovelPrefs(
@@ -200,6 +356,12 @@ class NovelPrefs {
         backgroundMode: backgroundMode ?? this.backgroundMode,
         perBookBackgroundMode:
             perBookBackgroundMode ?? this.perBookBackgroundMode,
+        perBookFontFamily: perBookFontFamily ?? this.perBookFontFamily,
+        autoScrollEnabledBooks:
+            autoScrollEnabledBooks ?? this.autoScrollEnabledBooks,
+        autoScrollSpeed: autoScrollSpeed ?? this.autoScrollSpeed,
+        showFloatingAutoScroll:
+            showFloatingAutoScroll ?? this.showFloatingAutoScroll,
         useVolumeButtons: useVolumeButtons ?? this.useVolumeButtons,
       );
 
@@ -220,6 +382,21 @@ class NovelPrefs {
     for (final e in other.perBookBackgroundMode.entries) {
       if (perBookBackgroundMode[e.key] != e.value) return false;
     }
+    if (other.perBookFontFamily.length != perBookFontFamily.length) {
+      return false;
+    }
+    for (final e in other.perBookFontFamily.entries) {
+      if (perBookFontFamily[e.key] != e.value) return false;
+    }
+    if (other.autoScrollSpeed != autoScrollSpeed) return false;
+    if (other.showFloatingAutoScroll != showFloatingAutoScroll) return false;
+    if (other.autoScrollEnabledBooks.length !=
+        autoScrollEnabledBooks.length) {
+      return false;
+    }
+    for (final k in other.autoScrollEnabledBooks) {
+      if (!autoScrollEnabledBooks.contains(k)) return false;
+    }
     return true;
   }
 
@@ -232,9 +409,13 @@ class NovelPrefs {
         backgroundMode,
         useVolumeButtons,
         // Map identity is fine here — every mutation builds a new Map
-        // via copyWith, so hashing by identity stays consistent with
-        // `==`.
+        // via copyWith, so hashing by length stays consistent with
+        // `==` while staying cheap.
         perBookBackgroundMode.length,
+        perBookFontFamily.length,
+        autoScrollEnabledBooks.length,
+        autoScrollSpeed,
+        showFloatingAutoScroll,
       );
 }
 
