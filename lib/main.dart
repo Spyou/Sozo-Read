@@ -11,6 +11,7 @@ import 'core/router/app_router.dart' show buildRouter, parseSozoReadDeepLink;
 import 'core/services/chapter_check_service.dart';
 import 'core/state/theme_cubit.dart';
 import 'core/theme/app_theme.dart';
+import 'features/settings/widgets/whats_new_sheet.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -77,7 +78,18 @@ class _SozoReadAppState extends State<SozoReadApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _maybeCheckNewChapters();
       _initDeepLinks();
+      _maybeShowWhatsNew();
     });
+  }
+
+  /// Pops the "What's new" sheet once if AppBootstrap detected a
+  /// version bump. Routes through the router so the sheet has a
+  /// Navigator above it; safe to call when nothing is pending.
+  void _maybeShowWhatsNew() {
+    final ctx = _router.routerDelegate.navigatorKey.currentContext;
+    if (ctx == null) return;
+    // ignore: discarded_futures
+    WhatsNewSheet.showIfPending(ctx);
   }
 
   @override

@@ -16,6 +16,7 @@ import '../repository/page_bookmarks_repository.dart';
 import '../repository/provider_repository.dart';
 import '../repository/read_chapters_repository.dart';
 import '../repository/tracker_repository.dart';
+import '../services/changelog_service.dart';
 import '../services/chapter_check_service.dart';
 import '../services/download_notification_service.dart';
 import '../trackers/anilist/anilist_api.dart';
@@ -113,6 +114,11 @@ Future<void> configureDependencies() async {
   // downloads Hive box on `start()` (called from AppBootstrap) and
   // renders one throttled, replace-in-place notification summarising
   // the active queue.
+  // GitHub release-notes fetcher with on-disk cache. Used by the
+  // What's new sheet (post version-bump) and /settings/changelog.
+  sl.registerLazySingleton<ChangelogService>(
+    () => ChangelogService(dio: sl(), boxName: 'settings'),
+  );
   sl.registerLazySingleton<DownloadNotificationService>(
     () => DownloadNotificationService(
       downloads: sl(),

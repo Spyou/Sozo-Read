@@ -24,6 +24,16 @@ enum MangaAutoScroll { off, slow, medium, fast }
 /// Image quality preference. `auto` lets the reader pick based on network.
 enum MangaImageQuality { auto, high, low }
 
+/// How a manga page sizes to the screen. `fitScreen` is the historical
+/// `BoxFit.contain` behavior (whole page visible, may letterbox);
+/// `fitWidth` fills the screen horizontally (taller pages overflow and
+/// require pan in vertical mode this means natural webtoon scroll);
+/// `fitHeight` fills vertically (mostly useful in horizontal/paged
+/// mode — the reader silently falls back to `fitWidth` when the user
+/// is in vertical mode since `fitHeight` inside a lazy ListView would
+/// break).
+enum MangaFitMode { fitWidth, fitHeight, fitScreen }
+
 /// Orientation lock preference for the manga reader screen.
 enum MangaOrientationLock { auto, portrait, landscape }
 
@@ -38,6 +48,7 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
   static const String _kColorFilter = 'manga.color_filter';
   static const String _kAutoScroll = 'manga.auto_scroll';
   static const String _kImageQuality = 'manga.image_quality';
+  static const String _kFitMode = 'manga.fit_mode';
   static const String _kOrientationLock = 'manga.orientation_lock';
   static const String _kKeepScreenOn = 'manga.keep_screen_on';
   static const String _kTapZoneNavigation = 'manga.tap_zone_navigation';
@@ -63,6 +74,7 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
   static const MangaColorFilter defaultColorFilter = MangaColorFilter.none;
   static const MangaAutoScroll defaultAutoScroll = MangaAutoScroll.off;
   static const MangaImageQuality defaultImageQuality = MangaImageQuality.auto;
+  static const MangaFitMode defaultFitMode = MangaFitMode.fitScreen;
   static const MangaOrientationLock defaultOrientationLock =
       MangaOrientationLock.auto;
   static const bool defaultKeepScreenOn = true;
@@ -83,6 +95,7 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
       colorFilter: _readColorFilter(_box.get(_kColorFilter) as String?),
       autoScroll: _readAutoScroll(_box.get(_kAutoScroll) as String?),
       imageQuality: _readImageQuality(_box.get(_kImageQuality) as String?),
+      fitMode: _readFitMode(_box.get(_kFitMode) as String?),
       orientationLock:
           _readOrientationLock(_box.get(_kOrientationLock) as String?),
       keepScreenOn: (_box.get(_kKeepScreenOn) as bool?) ?? defaultKeepScreenOn,
@@ -143,6 +156,14 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
     );
   }
 
+  static MangaFitMode _readFitMode(String? raw) {
+    if (raw == null) return defaultFitMode;
+    return MangaFitMode.values.firstWhere(
+      (v) => v.name == raw,
+      orElse: () => defaultFitMode,
+    );
+  }
+
   static MangaOrientationLock _readOrientationLock(String? raw) {
     if (raw == null) return defaultOrientationLock;
     return MangaOrientationLock.values.firstWhere(
@@ -191,6 +212,12 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
     if (v == state.imageQuality) return;
     _box.put(_kImageQuality, v.name);
     emit(state.copyWith(imageQuality: v));
+  }
+
+  void setFitMode(MangaFitMode v) {
+    if (v == state.fitMode) return;
+    _box.put(_kFitMode, v.name);
+    emit(state.copyWith(fitMode: v));
   }
 
   void setOrientationLock(MangaOrientationLock v) {
@@ -271,6 +298,7 @@ class MangaPrefs extends Equatable {
     this.showFloatingAutoScroll =
         MangaPrefsCubit.defaultShowFloatingAutoScroll,
     this.autoScrollEnabledBooks = const <String>{},
+    this.fitMode = MangaPrefsCubit.defaultFitMode,
     this.downloadsWifiOnly = MangaPrefsCubit.defaultDownloadsWifiOnly,
   });
 
@@ -298,6 +326,10 @@ class MangaPrefs extends Equatable {
   /// series doesn't carry the previous one's toggle.
   final Set<String> autoScrollEnabledBooks;
 
+  /// How manga pages size to the screen. See [MangaFitMode] for the
+  /// vertical-mode fall-back behavior.
+  final MangaFitMode fitMode;
+
   /// When true, the downloads worker pool refuses to start a chapter
   /// transfer unless the current network link is WiFi. Jobs picked up
   /// off-WiFi flip to `paused` with a "Waiting for WiFi" note and resume
@@ -316,6 +348,7 @@ class MangaPrefs extends Equatable {
     double? autoScrollSpeed,
     bool? showFloatingAutoScroll,
     Set<String>? autoScrollEnabledBooks,
+    MangaFitMode? fitMode,
     bool? downloadsWifiOnly,
   }) =>
       MangaPrefs(
@@ -332,6 +365,7 @@ class MangaPrefs extends Equatable {
             showFloatingAutoScroll ?? this.showFloatingAutoScroll,
         autoScrollEnabledBooks:
             autoScrollEnabledBooks ?? this.autoScrollEnabledBooks,
+        fitMode: fitMode ?? this.fitMode,
         downloadsWifiOnly: downloadsWifiOnly ?? this.downloadsWifiOnly,
       );
 
@@ -348,6 +382,7 @@ class MangaPrefs extends Equatable {
         autoScrollSpeed,
         showFloatingAutoScroll,
         autoScrollEnabledBooks,
+        fitMode,
         downloadsWifiOnly,
       ];
 }

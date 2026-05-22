@@ -74,6 +74,15 @@ dependencies:
   # System share sheet for sozoread:// deep links from the detail screen.
   share_plus: ^10.1.4
 
+  # App version lookup for the changelog viewer (compare cold-start
+  # version against persisted last-seen-version to decide whether to
+  # pop the What's new sheet).
+  package_info_plus: ^8.0.2
+
+  # Renders GitHub release notes (markdown) in the changelog screen +
+  # What's new bottom sheet.
+  flutter_markdown: ^0.7.4+1
+
   # Keep the screen on while the manga reader is mounted.
   wakelock_plus: ^1.2.10
 

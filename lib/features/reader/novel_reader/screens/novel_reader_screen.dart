@@ -52,6 +52,7 @@ class _NovelViewState extends State<_NovelView> {
 
   Future<void> _openSettings(BuildContext context) async {
     final prefsCubit = context.read<NovelPrefsCubit>();
+    final book = context.read<NovelReaderBloc>().state.book;
     await showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -59,7 +60,10 @@ class _NovelViewState extends State<_NovelView> {
       builder: (ctx) {
         return BlocProvider.value(
           value: prefsCubit,
-          child: const _NovelSettingsSheet(),
+          child: _NovelSettingsSheet(
+            sourceId: book?.sourceId,
+            bookId: book?.id,
+          ),
         );
       },
     );
@@ -103,7 +107,16 @@ class _NovelViewState extends State<_NovelView> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final bgMode = context.watch<NovelPrefsCubit>().state.backgroundMode;
+    final prefsCubit = context.watch<NovelPrefsCubit>();
+    // Per-book background override falls back to the global mode when
+    // the user hasn't set one, or while the book is still loading
+    // (state.book is null on cold start).
+    final book = context.select<NovelReaderBloc, BookDetail?>(
+      (b) => b.state.book,
+    );
+    final bgMode = book == null
+        ? prefsCubit.state.backgroundMode
+        : prefsCubit.resolveBackgroundFor(book.sourceId, book.id);
     final bg = ReadingBg.backgroundFor(bgMode, context) ??
         theme.scaffoldBackgroundColor;
     final fg = ReadingBg.textFor(bgMode, context);
@@ -319,7 +332,12 @@ class _NovelNavBar extends StatelessWidget {
 }
 
 class _NovelSettingsSheet extends StatelessWidget {
-  const _NovelSettingsSheet();
+  const _NovelSettingsSheet({this.sourceId, this.bookId});
+  final String? sourceId;
+  final String? bookId;
+
+  bool get _hasBook =>
+      sourceId != null && bookId != null && sourceId!.isNotEmpty;
 
   @override
   Widget build(BuildContext context) {
@@ -350,16 +368,50 @@ class _NovelSettingsSheet extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 18),
-                  const Text('Background',
-                      style: TextStyle(
-                        color: AppColors.textSecondary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      )),
+                  Row(
+                    children: [
+                      const Text('Background',
+                          style: TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          )),
+                      if (_hasBook &&
+                          prefs.perBookBackgroundMode.containsKey(
+                              NovelPrefsCubit.bookKey(sourceId!, bookId!))) ...[
+                        const SizedBox(width: 8),
+                        TextButton(
+                          onPressed: () => cubit.setBackgroundForBook(
+                            sourceId!,
+                            bookId!,
+                            null,
+                          ),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 0),
+                            minimumSize: const Size(0, 24),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: const Text('Use global',
+                              style: TextStyle(fontSize: 11)),
+                        ),
+                      ],
+                    ],
+                  ),
                   const SizedBox(height: 8),
                   ReadingBgPicker(
-                    value: prefs.backgroundMode,
-                    onChanged: cubit.setBackgroundMode,
+                    // Show the effective mode for this book — either the
+                    // per-book override or the global default.
+                    value: _hasBook
+                        ? cubit.resolveBackgroundFor(sourceId!, bookId!)
+                        : prefs.backgroundMode,
+                    onChanged: (mode) {
+                      if (_hasBook) {
+                        cubit.setBackgroundForBook(sourceId!, bookId!, mode);
+                      } else {
+                        cubit.setBackgroundMode(mode);
+                      }
+                    },
                   ),
                   const SizedBox(height: 18),
                   const Text('Font size',
@@ -377,17 +429,17 @@ class _NovelSettingsSheet extends StatelessWidget {
                     onChanged: cubit.setFontSize,
                   ),
                   const SizedBox(height: 4),
-                  const Text('Line height',
+                  const Text('Line spacing',
                       style: TextStyle(
                         color: AppColors.textSecondary,
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                       )),
                   Slider(
-                    value: prefs.lineHeight.clamp(1.2, 2.2),
-                    min: 1.2,
-                    max: 2.2,
-                    divisions: 10,
+                    value: prefs.lineHeight.clamp(1.0, 2.5),
+                    min: 1.0,
+                    max: 2.5,
+                    divisions: 15,
                     label: prefs.lineHeight.toStringAsFixed(2),
                     onChanged: cubit.setLineHeight,
                   ),

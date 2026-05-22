@@ -100,6 +100,8 @@ class PageImage extends StatefulWidget {
     required this.bookId,
     required this.chapterId,
     required this.pageIndex,
+    this.bookTitle,
+    this.chapterTitle,
     this.fit = BoxFit.fitWidth,
   });
 
@@ -108,6 +110,11 @@ class PageImage extends StatefulWidget {
   final String bookId;
   final String chapterId;
   final int pageIndex;
+  // Optional human-readable labels used to build save-to-gallery
+  // filenames (`{book}_{chapter}_p{N}.jpg`). When either is null/empty
+  // we fall back to the legacy timestamped filename.
+  final String? bookTitle;
+  final String? chapterTitle;
   final BoxFit fit;
 
   @override
@@ -173,6 +180,9 @@ class _PageImageState extends State<PageImage> {
     // Local-file URLs (offline-downloaded pages) don't make sense to
     // re-save or open via URL — skip the menu entirely.
     if (url.startsWith('file://') || url.startsWith('/')) return;
+    // Tactile feedback so the long-press registration is obvious — the
+    // bottom sheet animation alone is easy to miss while reading.
+    HapticFeedback.mediumImpact();
 
     await showModalBottomSheet<void>(
       context: context,
@@ -294,6 +304,29 @@ class _PageImageState extends State<PageImage> {
     }
   }
 
+  /// Build a filename like `Blue_Lock_Ch_245_p3.jpg`. Sanitises both
+  /// titles by stripping anything that isn't alphanumeric/space/dash,
+  /// collapsing whitespace to `_`, and trimming. Falls back to a
+  /// timestamped name if either label is missing so the user always
+  /// gets a unique file.
+  String _buildSaveFilename() {
+    String clean(String? raw) {
+      if (raw == null) return '';
+      final stripped = raw
+          .replaceAll(RegExp(r'[^A-Za-z0-9\s\-]'), '')
+          .replaceAll(RegExp(r'\s+'), '_')
+          .trim();
+      return stripped.length > 60 ? stripped.substring(0, 60) : stripped;
+    }
+
+    final book = clean(widget.bookTitle);
+    final chapter = clean(widget.chapterTitle);
+    if (book.isEmpty || chapter.isEmpty) {
+      return 'sozo_manga_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    }
+    return '${book}_${chapter}_p${widget.pageIndex + 1}.jpg';
+  }
+
   Future<void> _saveImage() async {
     final messenger = ScaffoldMessenger.of(context);
     try {
@@ -313,8 +346,7 @@ class _PageImageState extends State<PageImage> {
         throw StateError('Empty response body');
       }
       final bytes = Uint8List.fromList(data);
-      final fileName =
-          'sozo_manga_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final fileName = _buildSaveFilename();
       final result = await SaverGallery.saveImage(
         bytes,
         fileName: fileName,

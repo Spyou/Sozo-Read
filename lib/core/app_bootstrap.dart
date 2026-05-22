@@ -6,6 +6,8 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:package_info_plus/package_info_plus.dart';
+
 import 'di/injection.dart';
 import 'provider/provider_downloader.dart';
 import 'provider/provider_registry.dart';
@@ -20,6 +22,7 @@ import 'repository/page_bookmarks_repository.dart';
 import 'repository/provider_repository.dart';
 import 'repository/read_chapters_repository.dart';
 import 'repository/tracker_repository.dart';
+import 'services/changelog_service.dart';
 import 'services/download_notification_service.dart';
 import 'services/downloads_background_service.dart';
 import 'services/notification_service.dart';
@@ -132,6 +135,25 @@ class AppBootstrap {
     // no global teardown hook, but `Hive.close()` during shutdown
     // tears the stream down cleanly.
     bindDownloadsBackgroundLifecycle(sl<DownloadsRepository>());
+
+    // Detect a version bump since the last cold start. The "What's
+    // new" sheet shown by `main.dart` reads `pendingShow` after the
+    // first frame. A null `last_seen_version` (fresh install) does
+    // NOT trigger the sheet — only an actual upgrade does.
+    try {
+      const lastSeenKey = 'changelog.last_seen_version';
+      final settingsBox = Hive.box('settings');
+      final pkg = await PackageInfo.fromPlatform();
+      final currentVersion = '${pkg.version}+${pkg.buildNumber}';
+      final lastSeen = settingsBox.get(lastSeenKey) as String?;
+      final service = sl<ChangelogService>();
+      if (lastSeen != null && lastSeen != currentVersion) {
+        service.pendingShow = true;
+      }
+      await settingsBox.put(lastSeenKey, currentVersion);
+    } catch (e) {
+      debugPrint('[bootstrap] version-bump detection failed: $e');
+    }
   }
 }
 

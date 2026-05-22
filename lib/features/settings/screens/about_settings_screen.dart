@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
-import '../../../core/widgets/app_snack.dart';
+import 'package:go_router/go_router.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/widgets/app_snack.dart';
 import '../widgets/settings_widgets.dart';
 
 /// `/settings/about` — minimal About page for end-users.
@@ -13,7 +15,6 @@ class AboutSettingsScreen extends StatelessWidget {
   const AboutSettingsScreen({super.key});
 
   static const _appName = 'Sozo Read';
-  static const _appVersion = 'v1.0.0';
   static const _tagline = 'Read manga and novels anytime, anywhere.';
   static const _telegramHandle = 'sozo_disscussion';
 
@@ -59,14 +60,22 @@ class AboutSettingsScreen extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Center(
-            child: Text(
-              _appVersion,
-              style: TextStyle(
-                color: muted,
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                letterSpacing: 0.2,
-              ),
+            child: FutureBuilder<PackageInfo>(
+              future: PackageInfo.fromPlatform(),
+              builder: (context, snap) {
+                final v = snap.hasData
+                    ? 'v${snap.data!.version}+${snap.data!.buildNumber}'
+                    : '...';
+                return Text(
+                  v,
+                  style: TextStyle(
+                    color: muted,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: 0.2,
+                  ),
+                );
+              },
             ),
           ),
           const SizedBox(height: 22),
@@ -87,6 +96,12 @@ class AboutSettingsScreen extends StatelessWidget {
           const SizedBox(height: 32),
           SettingsCard(
             children: [
+              SettingsTile(
+                icon: Icons.history_rounded,
+                title: 'Release notes',
+                subtitle: "What's new in each version",
+                onTap: () => context.pushNamed('settings-changelog'),
+              ),
               SettingsTile(
                 icon: Icons.forum_rounded,
                 title: 'Community & feedback',

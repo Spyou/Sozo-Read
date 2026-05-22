@@ -1533,6 +1533,23 @@ class _PageContent extends StatelessWidget {
   }
 }
 
+/// Resolves the user's `MangaFitMode` preference into a concrete
+/// [BoxFit]. `fitHeight` inside a lazy ListView (vertical reader)
+/// breaks layout, so we silently fall back to `fitWidth` there — the
+/// settings sheet hides the option in that mode too, but this guard
+/// keeps things safe if the pref was already persisted from horizontal
+/// mode.
+BoxFit _resolveFit(MangaFitMode mode, {required bool isVertical}) {
+  switch (mode) {
+    case MangaFitMode.fitWidth:
+      return BoxFit.fitWidth;
+    case MangaFitMode.fitHeight:
+      return isVertical ? BoxFit.fitWidth : BoxFit.fitHeight;
+    case MangaFitMode.fitScreen:
+      return BoxFit.contain;
+  }
+}
+
 class _VerticalReader extends StatelessWidget {
   const _VerticalReader({
     required this.state,
@@ -1560,6 +1577,10 @@ class _VerticalReader extends StatelessWidget {
     final gap = ReadingBg.mangaGapFor(bgMode, context);
     final isLight = bgMode == ReadingBgMode.white || bgMode == ReadingBgMode.sepia;
     final footerText = isLight ? Colors.black38 : Colors.white38;
+    final fit = _resolveFit(
+      context.watch<MangaPrefsCubit>().state.fitMode,
+      isVertical: true,
+    );
     // The list has one trailing slot for the next-chapter preview card when
     // available; the bloc's pageIndex math still tracks page count only.
     final pageCount = state.pages.length;
@@ -1628,7 +1649,15 @@ class _VerticalReader extends StatelessWidget {
                                   state.book!.chapters.length)
                           ? state.book!.chapters[state.chapterIndex].id
                           : '',
+                      bookTitle: state.book?.title,
+                      chapterTitle: (state.book != null &&
+                              state.chapterIndex >= 0 &&
+                              state.chapterIndex <
+                                  state.book!.chapters.length)
+                          ? state.book!.chapters[state.chapterIndex].title
+                          : null,
                       pageIndex: i,
+                      fit: fit,
                     ),
                     Container(
                       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -1670,6 +1699,10 @@ class _HorizontalReader extends StatelessWidget {
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
     final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
+    final fit = _resolveFit(
+      context.watch<MangaPrefsCubit>().state.fitMode,
+      isVertical: false,
+    );
     final pageCount = state.pages.length;
     final itemCount = hasNextChapter ? pageCount + 1 : pageCount;
     return Stack(
@@ -1716,8 +1749,16 @@ class _HorizontalReader extends StatelessWidget {
                               ? state.book!
                                   .chapters[state.chapterIndex].id
                               : '',
+                          bookTitle: state.book?.title,
+                          chapterTitle: (state.book != null &&
+                                  state.chapterIndex >= 0 &&
+                                  state.chapterIndex <
+                                      state.book!.chapters.length)
+                              ? state.book!
+                                  .chapters[state.chapterIndex].title
+                              : null,
                           pageIndex: i,
-                          fit: BoxFit.contain,
+                          fit: fit,
                         ),
                       ),
                     ),
@@ -1734,8 +1775,16 @@ class _HorizontalReader extends StatelessWidget {
                               ? state.book!
                                   .chapters[state.chapterIndex].id
                               : '',
+                          bookTitle: state.book?.title,
+                          chapterTitle: (state.book != null &&
+                                  state.chapterIndex >= 0 &&
+                                  state.chapterIndex <
+                                      state.book!.chapters.length)
+                              ? state.book!
+                                  .chapters[state.chapterIndex].title
+                              : null,
                           pageIndex: i + 1,
-                          fit: BoxFit.contain,
+                          fit: fit,
                         ),
                       ),
                     ),
@@ -1759,8 +1808,15 @@ class _HorizontalReader extends StatelessWidget {
                               state.book!.chapters.length)
                       ? state.book!.chapters[state.chapterIndex].id
                       : '',
+                  bookTitle: state.book?.title,
+                  chapterTitle: (state.book != null &&
+                          state.chapterIndex >= 0 &&
+                          state.chapterIndex <
+                              state.book!.chapters.length)
+                      ? state.book!.chapters[state.chapterIndex].title
+                      : null,
                   pageIndex: i,
-                  fit: BoxFit.contain,
+                  fit: fit,
                 ),
               ),
             );

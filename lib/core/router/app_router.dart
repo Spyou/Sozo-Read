@@ -20,6 +20,7 @@ import '../../features/reader/novel_reader/screens/novel_reader_screen.dart';
 import '../../features/search/screens/search_screen.dart';
 import '../../features/settings/screens/about_settings_screen.dart';
 import '../../features/settings/screens/appearance_settings_screen.dart';
+import '../../features/settings/screens/changelog_screen.dart';
 import '../../features/settings/screens/developers_settings_screen.dart';
 import '../../features/settings/screens/reading_settings_screen.dart';
 import '../../features/settings/screens/settings_screen.dart';
@@ -232,6 +233,11 @@ GoRouter buildRouter() {
         path: '/settings/about',
         name: 'settings-about',
         builder: (_, _) => const AboutSettingsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/changelog',
+        name: 'settings-changelog',
+        builder: (_, _) => const ChangelogScreen(),
       ),
       GoRoute(
         path: '/settings/trackers',

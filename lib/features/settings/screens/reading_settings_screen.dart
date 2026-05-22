@@ -99,6 +99,21 @@ class ReadingSettingsScreen extends StatelessWidget {
                         ),
                       ),
                       SettingsTile(
+                        icon: Icons.fit_screen_rounded,
+                        title: 'Image fit',
+                        subtitle: fitModeLabel(m.fitMode),
+                        onTap: () => openMangaFitModeSheet(
+                          context,
+                          m.fitMode,
+                          // Fit height only makes sense in paged/horizontal
+                          // mode — hide the option when the user reads in
+                          // vertical/webtoon mode to avoid a confusing
+                          // setting that visibly does nothing.
+                          fitHeightAvailable: m.readingDirection !=
+                              MangaReadingDirection.vertical,
+                        ),
+                      ),
+                      SettingsTile(
                         icon: Icons.screen_rotation_rounded,
                         title: 'Lock orientation',
                         subtitle: orientationLockLabel(m.orientationLock),

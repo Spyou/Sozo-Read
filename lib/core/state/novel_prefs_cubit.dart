@@ -16,6 +16,10 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
   static const String _kMargin = 'novel.horizontalMargin';
   static const String _kFontFamily = 'novel.fontFamily';
   static const String _kBg = 'novel.bg';
+  /// Per-book background override. Stored as a `Map<String,String>` of
+  /// `sourceId::bookId` → `ReadingBgMode.name`. Absent keys fall back to
+  /// the global [_kBg].
+  static const String _kPerBookBg = 'novel.per_book_bg';
   static const String _kVolumeButtons = 'reader.volume_buttons';
 
   static const double defaultFontSize = 16;
@@ -52,6 +56,9 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
 
   static Box get _box => Hive.box(_boxName);
 
+  static String bookKey(String sourceId, String bookId) =>
+      '$sourceId::$bookId';
+
   static NovelPrefs _loadInitial() {
     return NovelPrefs(
       fontSize: (_box.get(_kFontSize) as num?)?.toDouble() ?? defaultFontSize,
@@ -60,9 +67,20 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
           (_box.get(_kMargin) as num?)?.toDouble() ?? defaultMargin,
       fontFamily: (_box.get(_kFontFamily) as String?) ?? defaultFontFamily,
       backgroundMode: _readBg(_box.get(_kBg) as String?),
+      perBookBackgroundMode: _readPerBookBg(),
       useVolumeButtons:
           (_box.get(_kVolumeButtons) as bool?) ?? defaultUseVolumeButtons,
     );
+  }
+
+  static Map<String, String> _readPerBookBg() {
+    final raw = _box.get(_kPerBookBg);
+    if (raw is Map) {
+      return raw.map(
+        (k, v) => MapEntry(k.toString(), v.toString()),
+      );
+    }
+    return const <String, String>{};
   }
 
   static ReadingBgMode _readBg(String? raw) {
@@ -82,7 +100,7 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
   void bumpFontSize(double delta) => setFontSize(state.fontSize + delta);
 
   void setLineHeight(double v) {
-    final clamped = v.clamp(1.2, 2.2);
+    final clamped = v.clamp(1.0, 2.5);
     _box.put(_kLineHeight, clamped);
     emit(state.copyWith(lineHeight: clamped));
   }
@@ -104,6 +122,37 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
     emit(state.copyWith(backgroundMode: mode));
   }
 
+  /// Resolve the effective background for a given book: per-book
+  /// override if the user set one, else the global default.
+  ReadingBgMode resolveBackgroundFor(String sourceId, String bookId) {
+    final override = state.perBookBackgroundMode[bookKey(sourceId, bookId)];
+    if (override == null) return state.backgroundMode;
+    return ReadingBgMode.values.firstWhere(
+      (m) => m.name == override,
+      orElse: () => state.backgroundMode,
+    );
+  }
+
+  /// Set or clear the per-book background override. Pass `null` to drop
+  /// the override and fall back to the global mode.
+  void setBackgroundForBook(
+    String sourceId,
+    String bookId,
+    ReadingBgMode? mode,
+  ) {
+    final key = bookKey(sourceId, bookId);
+    final next = Map<String, String>.from(state.perBookBackgroundMode);
+    if (mode == null) {
+      if (!next.containsKey(key)) return;
+      next.remove(key);
+    } else {
+      if (next[key] == mode.name) return;
+      next[key] = mode.name;
+    }
+    _box.put(_kPerBookBg, next);
+    emit(state.copyWith(perBookBackgroundMode: next));
+  }
+
   void setUseVolumeButtons(bool v) {
     _box.put(_kVolumeButtons, v);
     emit(state.copyWith(useVolumeButtons: v));
@@ -119,6 +168,7 @@ class NovelPrefs {
     required this.fontFamily,
     required this.backgroundMode,
     required this.useVolumeButtons,
+    this.perBookBackgroundMode = const <String, String>{},
   });
 
   final double fontSize;
@@ -128,12 +178,18 @@ class NovelPrefs {
   final ReadingBgMode backgroundMode;
   final bool useVolumeButtons;
 
+  /// Per-book background override map. Key = `sourceId::bookId`,
+  /// value = [ReadingBgMode.name]. Resolved by
+  /// [NovelPrefsCubit.resolveBackgroundFor].
+  final Map<String, String> perBookBackgroundMode;
+
   NovelPrefs copyWith({
     double? fontSize,
     double? lineHeight,
     double? horizontalMargin,
     String? fontFamily,
     ReadingBgMode? backgroundMode,
+    Map<String, String>? perBookBackgroundMode,
     bool? useVolumeButtons,
   }) =>
       NovelPrefs(
@@ -142,23 +198,44 @@ class NovelPrefs {
         horizontalMargin: horizontalMargin ?? this.horizontalMargin,
         fontFamily: fontFamily ?? this.fontFamily,
         backgroundMode: backgroundMode ?? this.backgroundMode,
+        perBookBackgroundMode:
+            perBookBackgroundMode ?? this.perBookBackgroundMode,
         useVolumeButtons: useVolumeButtons ?? this.useVolumeButtons,
       );
 
   @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is NovelPrefs &&
-          other.fontSize == fontSize &&
-          other.lineHeight == lineHeight &&
-          other.horizontalMargin == horizontalMargin &&
-          other.fontFamily == fontFamily &&
-          other.backgroundMode == backgroundMode &&
-          other.useVolumeButtons == useVolumeButtons;
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! NovelPrefs) return false;
+    if (other.fontSize != fontSize) return false;
+    if (other.lineHeight != lineHeight) return false;
+    if (other.horizontalMargin != horizontalMargin) return false;
+    if (other.fontFamily != fontFamily) return false;
+    if (other.backgroundMode != backgroundMode) return false;
+    if (other.useVolumeButtons != useVolumeButtons) return false;
+    if (other.perBookBackgroundMode.length !=
+        perBookBackgroundMode.length) {
+      return false;
+    }
+    for (final e in other.perBookBackgroundMode.entries) {
+      if (perBookBackgroundMode[e.key] != e.value) return false;
+    }
+    return true;
+  }
 
   @override
-  int get hashCode => Object.hash(fontSize, lineHeight, horizontalMargin,
-      fontFamily, backgroundMode, useVolumeButtons);
+  int get hashCode => Object.hash(
+        fontSize,
+        lineHeight,
+        horizontalMargin,
+        fontFamily,
+        backgroundMode,
+        useVolumeButtons,
+        // Map identity is fine here — every mutation builds a new Map
+        // via copyWith, so hashing by identity stays consistent with
+        // `==`.
+        perBookBackgroundMode.length,
+      );
 }
 
 /// Color/contrast helpers for [ReadingBgMode].

@@ -275,6 +275,46 @@ Future<void> openMangaImageQualitySheet(
   );
 }
 
+Future<void> openMangaFitModeSheet(
+  BuildContext context,
+  MangaFitMode current, {
+  bool fitHeightAvailable = true,
+}) async {
+  final cubit = context.read<MangaPrefsCubit>();
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (ctx) {
+      return SettingsSheetShell(
+        title: 'Image fit',
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final entry in [
+              (MangaFitMode.fitScreen, Icons.fit_screen_rounded),
+              (MangaFitMode.fitWidth, Icons.swap_horiz_rounded),
+              if (fitHeightAvailable)
+                (MangaFitMode.fitHeight, Icons.swap_vert_rounded),
+            ])
+              ListTile(
+                leading: Icon(entry.$2),
+                title: Text(fitModeLabel(entry.$1)),
+                trailing: entry.$1 == current
+                    ? Icon(Icons.check,
+                        color: Theme.of(ctx).colorScheme.primary)
+                    : null,
+                onTap: () {
+                  cubit.setFitMode(entry.$1);
+                  Navigator.pop(ctx);
+                },
+              ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
 Future<void> openMangaOrientationLockSheet(
   BuildContext context,
   MangaOrientationLock current,
@@ -405,6 +445,17 @@ String imageQualityLabel(MangaImageQuality q) {
       return 'High';
     case MangaImageQuality.low:
       return 'Low';
+  }
+}
+
+String fitModeLabel(MangaFitMode m) {
+  switch (m) {
+    case MangaFitMode.fitWidth:
+      return 'Fit width';
+    case MangaFitMode.fitHeight:
+      return 'Fit height';
+    case MangaFitMode.fitScreen:
+      return 'Fit screen';
   }
 }
 
