@@ -44,6 +44,13 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
   static const String _kAutoScrollSpeed = 'manga.auto_scroll_speed';
   static const String _kShowFloatingAutoScroll =
       'manga.show_floating_auto_scroll';
+  /// Per-book auto-scroll opt-in. Stored as a `List<String>` of
+  /// `sourceId::bookId` keys; absent keys default to off. Replaces the
+  /// historical global [_kAutoScroll] toggle so switching between books
+  /// doesn't carry auto-scroll over (Blue Lock vs One Piece behave
+  /// independently).
+  static const String _kAutoScrollEnabledBooks =
+      'manga.auto_scroll_enabled_books';
   // Downloads scope. Lives on this cubit rather than its own so we don't
   // have to wire a new BlocProvider into the settings screen — the key
   // is read directly out of the same Hive `settings` box by
@@ -87,10 +94,22 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
       showFloatingAutoScroll:
           (_box.get(_kShowFloatingAutoScroll) as bool?) ??
               defaultShowFloatingAutoScroll,
+      autoScrollEnabledBooks: _readEnabledBooks(),
       downloadsWifiOnly:
           (_box.get(_kDownloadsWifiOnly) as bool?) ?? defaultDownloadsWifiOnly,
     );
   }
+
+  static Set<String> _readEnabledBooks() {
+    final raw = _box.get(_kAutoScrollEnabledBooks);
+    if (raw is List) {
+      return raw.whereType<String>().toSet();
+    }
+    return <String>{};
+  }
+
+  static String bookKey(String sourceId, String bookId) =>
+      '$sourceId::$bookId';
 
   static MangaReadingDirection _readDirection(String? raw) {
     if (raw == null) return defaultDirection;
@@ -205,6 +224,28 @@ class MangaPrefsCubit extends Cubit<MangaPrefs> {
     emit(state.copyWith(showFloatingAutoScroll: v));
   }
 
+  /// True iff the user has explicitly opted this book into auto-scroll.
+  /// Defaults to false — switching between books does NOT carry the
+  /// toggle over.
+  bool isAutoScrollEnabledForBook(String sourceId, String bookId) =>
+      state.autoScrollEnabledBooks.contains(bookKey(sourceId, bookId));
+
+  /// Toggle per-book auto-scroll. Persists immediately via Hive.
+  void setAutoScrollForBook(String sourceId, String bookId, bool enabled) {
+    final key = bookKey(sourceId, bookId);
+    final current = state.autoScrollEnabledBooks;
+    if (enabled && current.contains(key)) return;
+    if (!enabled && !current.contains(key)) return;
+    final next = Set<String>.from(current);
+    if (enabled) {
+      next.add(key);
+    } else {
+      next.remove(key);
+    }
+    _box.put(_kAutoScrollEnabledBooks, next.toList());
+    emit(state.copyWith(autoScrollEnabledBooks: next));
+  }
+
   /// Toggle the "WiFi only" gate for the downloads worker pool. Read by
   /// [DownloadsRepository] before picking up a job — when on and the
   /// current link is not WiFi, the job is flipped to `paused` with a
@@ -229,6 +270,7 @@ class MangaPrefs extends Equatable {
     this.autoScrollSpeed = MangaPrefsCubit.defaultAutoScrollSpeed,
     this.showFloatingAutoScroll =
         MangaPrefsCubit.defaultShowFloatingAutoScroll,
+    this.autoScrollEnabledBooks = const <String>{},
     this.downloadsWifiOnly = MangaPrefsCubit.defaultDownloadsWifiOnly,
   });
 
@@ -251,6 +293,11 @@ class MangaPrefs extends Equatable {
   /// auto-scroll is enabled. Default true.
   final bool showFloatingAutoScroll;
 
+  /// Books (keyed `sourceId::bookId`) the user has explicitly opted
+  /// into auto-scroll on. Absent = off. Per-book so opening a new
+  /// series doesn't carry the previous one's toggle.
+  final Set<String> autoScrollEnabledBooks;
+
   /// When true, the downloads worker pool refuses to start a chapter
   /// transfer unless the current network link is WiFi. Jobs picked up
   /// off-WiFi flip to `paused` with a "Waiting for WiFi" note and resume
@@ -268,6 +315,7 @@ class MangaPrefs extends Equatable {
     bool? tapZoneNavigation,
     double? autoScrollSpeed,
     bool? showFloatingAutoScroll,
+    Set<String>? autoScrollEnabledBooks,
     bool? downloadsWifiOnly,
   }) =>
       MangaPrefs(
@@ -282,6 +330,8 @@ class MangaPrefs extends Equatable {
         autoScrollSpeed: autoScrollSpeed ?? this.autoScrollSpeed,
         showFloatingAutoScroll:
             showFloatingAutoScroll ?? this.showFloatingAutoScroll,
+        autoScrollEnabledBooks:
+            autoScrollEnabledBooks ?? this.autoScrollEnabledBooks,
         downloadsWifiOnly: downloadsWifiOnly ?? this.downloadsWifiOnly,
       );
 
@@ -297,6 +347,7 @@ class MangaPrefs extends Equatable {
         tapZoneNavigation,
         autoScrollSpeed,
         showFloatingAutoScroll,
+        autoScrollEnabledBooks,
         downloadsWifiOnly,
       ];
 }

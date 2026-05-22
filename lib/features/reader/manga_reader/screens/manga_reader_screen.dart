@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/gestures.dart' show DragStartBehavior;
 import 'package:flutter/material.dart';
 import '../../../../core/widgets/app_snack.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
@@ -105,10 +107,6 @@ class _ReaderViewState extends State<_ReaderView>
   Duration _lastAutoTick = Duration.zero;
   MangaAutoScroll _autoScrollMode = MangaAutoScroll.off;
 
-  /// User-paused via the floating control. While true, the ticker still
-  /// runs (so it can resume cheaply) but each tick is a no-op. Distinct
-  /// from `_autoScrollMode == off` which destroys the ticker.
-  bool _autoScrollPaused = false;
   // Reactive speed read by the persistent ticker callback. Changing this
   // while the ticker is running takes effect on the next frame.
   double _autoScrollPxPerSec = 0;
@@ -125,6 +123,13 @@ class _ReaderViewState extends State<_ReaderView>
   bool _suppressNextVolumeEvent = false;
   StreamSubscription<NovelPrefs>? _prefsSub;
   StreamSubscription<MangaPrefs>? _mangaPrefsSub;
+  StreamSubscription<MangaReaderState>? _readerStateSub;
+
+  /// Last `sourceId::bookId` we evaluated auto-scroll for. Lets us
+  /// detect when the bloc emits a new book (e.g. on initial load or a
+  /// chapter-driven book swap) so we can re-look-up the per-book
+  /// auto-scroll preference.
+  String? _lastAutoScrollBookKey;
 
   // InteractiveViewer transformation controllers — one for vertical, one
   // for horizontal mode. Used to drive programmatic double-tap zoom.
@@ -171,12 +176,31 @@ class _ReaderViewState extends State<_ReaderView>
       _applyOrientationLock(p.orientationLock);
       _applyAutoScroll(p);
     });
+
+    // Auto-scroll is per-book — when the bloc emits a new book (cold
+    // load, or a chapter swap that crosses series boundaries), look up
+    // its per-book preference and start/stop the ticker accordingly.
+    final readerBloc = context.read<MangaReaderBloc>();
+    _readerStateSub = readerBloc.stream.listen((s) {
+      if (!mounted) return;
+      final key = _bookKeyFromState(s);
+      if (key == _lastAutoScrollBookKey) return;
+      _lastAutoScrollBookKey = key;
+      _applyAutoScroll(context.read<MangaPrefsCubit>().state);
+    });
+  }
+
+  String? _bookKeyFromState(MangaReaderState s) {
+    final b = s.book;
+    if (b == null) return null;
+    return MangaPrefsCubit.bookKey(b.sourceId, b.id);
   }
 
   @override
   void dispose() {
     _prefsSub?.cancel();
     _mangaPrefsSub?.cancel();
+    _readerStateSub?.cancel();
     _pageIndicatorTimer?.cancel();
     _uninstallVolumeListener();
     // Always release the wakelock and restore default orientation so the
@@ -217,25 +241,35 @@ class _ReaderViewState extends State<_ReaderView>
     return 15.0 + 285.0 * f.clamp(0.0, 1.0);
   }
 
-  /// Apply both [MangaPrefs.autoScroll] (on/off via the preset enum;
-  /// `off` tears down the ticker) and [MangaPrefs.autoScrollSpeed] (the
-  /// live px/sec value picked up by the running ticker). Listen on prefs
-  /// stream so slider drags + on/off toggles take effect immediately.
+  /// Read the per-book auto-scroll opt-in for the bloc's current book.
+  /// Returns false when no book has loaded yet so the ticker stays
+  /// stopped during the cold-start window.
+  bool _autoScrollEnabledForCurrentBook(MangaPrefs prefs) {
+    final book = context.read<MangaReaderBloc>().state.book;
+    if (book == null) return false;
+    return prefs.autoScrollEnabledBooks
+        .contains(MangaPrefsCubit.bookKey(book.sourceId, book.id));
+  }
+
+  /// Apply the current book's auto-scroll opt-in + the live speed
+  /// slider. Listens to both the prefs stream and the bloc state stream
+  /// so changes from either side (user toggling, or a new book loading)
+  /// take effect immediately.
   void _applyAutoScroll(MangaPrefs prefs) {
-    final mode = prefs.autoScroll;
+    final enabled = _autoScrollEnabledForCurrentBook(prefs);
     // Live speed — picked up by the running ticker on every frame.
     _autoScrollPxPerSec =
-        mode == MangaAutoScroll.off ? 0 : _autoScrollPxPerSecFromFraction(
-              prefs.autoScrollSpeed,
-            );
+        enabled ? _autoScrollPxPerSecFromFraction(prefs.autoScrollSpeed) : 0;
 
-    // On/off transition: spin up or tear down the ticker.
-    if (mode == _autoScrollMode) return;
-    _autoScrollMode = mode;
+    // Map the per-book bool back onto the local preset enum so the rest
+    // of the screen (FAB visibility, mode comparisons) keeps working
+    // unchanged.
+    final desiredMode = enabled ? MangaAutoScroll.medium : MangaAutoScroll.off;
+    if (desiredMode == _autoScrollMode) return;
+    _autoScrollMode = desiredMode;
     _autoScrollEndFrames = 0;
-    if (mode == MangaAutoScroll.off) {
+    if (!enabled) {
       _autoScrollTicker?.stop();
-      _autoScrollPaused = false;
       return;
     }
     // SingleTickerProviderStateMixin only allows createTicker() to be called
@@ -243,32 +277,12 @@ class _ReaderViewState extends State<_ReaderView>
     // once, then stop/start the same Ticker on every toggle.
     _autoScrollTicker ??= createTicker(_onAutoScrollTick);
     _lastAutoTick = Duration.zero;
-    _autoScrollPaused = false;
     if (!_autoScrollTicker!.isActive) {
       _autoScrollTicker!.start();
     }
   }
 
-  /// Toggles the floating pause/play state without tearing down the
-  /// ticker. Called from the floating control.
-  void _toggleAutoScrollPaused() {
-    if (_autoScrollMode == MangaAutoScroll.off) return;
-    setState(() {
-      _autoScrollPaused = !_autoScrollPaused;
-      // Reset the time baseline so resume doesn't snap forward by the
-      // delta we accumulated while paused.
-      _lastAutoTick = Duration.zero;
-    });
-  }
-
   void _onAutoScrollTick(Duration elapsed) {
-    // User-paused via the floating control. Ticker stays alive so we
-    // can resume cheaply, but each frame is a no-op.
-    if (_autoScrollPaused) {
-      _lastAutoTick = elapsed;
-      _autoScrollEndFrames = 0;
-      return;
-    }
     // Paged/horizontal reader uses PageController, not ScrollController —
     // auto-scroll only makes sense for vertical/webtoon. The ScrollController
     // won't have clients there; we no-op those frames silently.
@@ -801,23 +815,20 @@ class _ReaderViewState extends State<_ReaderView>
                   ),
                 ),
 
-              // Floating pause/play pill — visible whenever auto-scroll
-              // is enabled AND the user hasn't hidden it via prefs.
-              // Lives outside the chrome-visibility gate so it stays on
-              // screen even when the user is reading with chrome hidden.
+              // Floating auto-scroll entry point. Draggable within the
+              // reader screen bounds; tap opens the auto-scroll sheet
+              // (speed slider). Gated on `showFloatingAutoScroll` so
+              // users who don't want the button on-screen can hide it
+              // from the reader settings sheet.
               if (state.mode == ReaderMode.vertical &&
                   _autoScrollMode != MangaAutoScroll.off &&
                   context
                       .watch<MangaPrefsCubit>()
                       .state
                       .showFloatingAutoScroll)
-                Positioned(
-                  right: 16,
-                  bottom: MediaQuery.of(context).size.height * 0.45,
-                  child: _AutoScrollFab(
-                    paused: _autoScrollPaused,
-                    onTap: _toggleAutoScrollPaused,
-                    onLongPress: _openAutoScrollSheet,
+                Positioned.fill(
+                  child: _DraggableAutoScrollFab(
+                    onTap: _openAutoScrollSheet,
                   ),
                 ),
 
@@ -831,7 +842,6 @@ class _ReaderViewState extends State<_ReaderView>
                     }
                   },
                   onOpenSettings: () => _openSettingsSheet(state),
-                  onOpenAutoScroll: () => _openAutoScrollSheet(),
                   onMarkComplete: () => _markCompleted(state),
                   onCycleDirection: _cycleReadingDirection,
                 ),
@@ -938,6 +948,13 @@ class _ReaderViewState extends State<_ReaderView>
   /// the slider tunes the active ticker in real time.
   Future<void> _openAutoScrollSheet() async {
     final mangaPrefs = context.read<MangaPrefsCubit>();
+    final book = context.read<MangaReaderBloc>().state.book;
+    // No book = no sheet (auto-scroll is per-book; nothing meaningful
+    // to toggle). The FAB shouldn't be visible in this state anyway,
+    // but guard defensively.
+    if (book == null) return;
+    final sourceId = book.sourceId;
+    final bookId = book.id;
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -945,7 +962,7 @@ class _ReaderViewState extends State<_ReaderView>
       builder: (ctx) {
         return BlocProvider.value(
           value: mangaPrefs,
-          child: const _AutoScrollSheet(),
+          child: _AutoScrollSheet(sourceId: sourceId, bookId: bookId),
         );
       },
     );
@@ -1137,12 +1154,45 @@ class _ReaderSettingsSheet extends StatelessWidget {
                         onTap: () =>
                             openMangaColorFilterSheet(context, mp.colorFilter),
                       ),
-                      // Auto-scroll moved out — the reader's top bar now
-                      // has a dedicated play-circle icon that opens the
-                      // full Auto-scroll sheet (enable + continuous speed
-                      // slider + floating control). Having a coarse
-                      // Slow/Medium/Fast picker here too just duplicated
-                      // the same setting in a worse UX.
+                      // Auto-scroll is per-book: the toggle below
+                      // writes to `mp.autoScrollEnabledBooks` keyed by
+                      // the current `sourceId::bookId`. Opening a
+                      // different series later won't carry the toggle
+                      // — each book remembers its own state.
+                      if (state.book != null)
+                        Builder(builder: (_) {
+                          final book = state.book!;
+                          final enabled = mp.autoScrollEnabledBooks.contains(
+                              MangaPrefsCubit.bookKey(
+                                  book.sourceId, book.id));
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _SheetSwitchRow(
+                                icon: Icons.play_circle_outline_rounded,
+                                label: 'Auto-scroll',
+                                value: enabled,
+                                onChanged: (v) => cubit.setAutoScrollForBook(
+                                  book.sourceId,
+                                  book.id,
+                                  v,
+                                ),
+                              ),
+                              // Companion toggle for the draggable
+                              // floating button. Stays global — a user
+                              // who hides the button can re-enable it
+                              // from here even if the floating control
+                              // (the only other entry point) is gone.
+                              if (enabled)
+                                _SheetSwitchRow(
+                                  icon: Icons.drag_indicator_rounded,
+                                  label: 'Floating control',
+                                  value: mp.showFloatingAutoScroll,
+                                  onChanged: cubit.setShowFloatingAutoScroll,
+                                ),
+                            ],
+                          );
+                        }),
                       _SheetPickerRow(
                         icon: Icons.high_quality_outlined,
                         label: 'Image quality',
@@ -1814,7 +1864,6 @@ class _TopBar extends StatelessWidget {
     required this.onBack,
     required this.onOpenChapters,
     required this.onOpenSettings,
-    required this.onOpenAutoScroll,
     required this.onMarkComplete,
     required this.onCycleDirection,
   });
@@ -1822,7 +1871,6 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onBack;
   final VoidCallback onOpenChapters;
   final VoidCallback onOpenSettings;
-  final VoidCallback onOpenAutoScroll;
   final VoidCallback onMarkComplete;
   final VoidCallback onCycleDirection;
 
@@ -1893,20 +1941,10 @@ class _TopBar extends StatelessWidget {
                       icon: const Icon(Icons.list, color: Colors.white),
                       onPressed: onOpenChapters,
                     ),
-                    // Highlighted when auto-scroll is currently running
-                    // so the user can spot it without opening the sheet.
-                    IconButton(
-                      tooltip: 'Auto-scroll',
-                      icon: Icon(
-                        prefs.autoScroll == MangaAutoScroll.off
-                            ? Icons.play_circle_outline_rounded
-                            : Icons.play_circle_rounded,
-                        color: prefs.autoScroll == MangaAutoScroll.off
-                            ? Colors.white
-                            : AppColors.primary,
-                      ),
-                      onPressed: onOpenAutoScroll,
-                    ),
+                    // Auto-scroll lives in the reader settings sheet
+                    // (Reading section) and surfaces as a draggable
+                    // floating button on the reader once enabled — no
+                    // top-bar entry point.
                     IconButton(
                       tooltip: 'Settings',
                       icon: const Icon(Icons.tune_rounded, color: Colors.white),
@@ -2252,18 +2290,21 @@ class _PageSlider extends StatelessWidget {
   }
 }
 
-/// Bottom sheet driving auto-scroll: Enable toggle, continuous speed
-/// slider, floating-control toggle. Subscribes to [MangaPrefsCubit]
-/// so any drag updates the running ticker live.
+/// Bottom sheet driving auto-scroll for the current book. Enable
+/// toggles per-book; the speed slider and floating-control checkbox
+/// stay global (the slider tunes the running ticker live).
 class _AutoScrollSheet extends StatelessWidget {
-  const _AutoScrollSheet();
+  const _AutoScrollSheet({required this.sourceId, required this.bookId});
+  final String sourceId;
+  final String bookId;
 
   @override
   Widget build(BuildContext context) {
     return BlocBuilder<MangaPrefsCubit, MangaPrefs>(
       builder: (context, prefs) {
         final cubit = context.read<MangaPrefsCubit>();
-        final enabled = prefs.autoScroll != MangaAutoScroll.off;
+        final enabled = prefs.autoScrollEnabledBooks
+            .contains(MangaPrefsCubit.bookKey(sourceId, bookId));
         return Container(
           decoration: const BoxDecoration(
             color: AppColors.surface,
@@ -2313,16 +2354,11 @@ class _AutoScrollSheet extends StatelessWidget {
                       Switch.adaptive(
                         value: enabled,
                         activeTrackColor: AppColors.primary,
-                        onChanged: (v) {
-                          // Persist as the medium-ish preset bucket so
-                          // pre-existing code paths that only look at
-                          // the enum still behave sensibly; the
-                          // continuous slider above drives the real
-                          // speed at runtime.
-                          cubit.setAutoScroll(
-                            v ? MangaAutoScroll.medium : MangaAutoScroll.off,
-                          );
-                        },
+                        onChanged: (v) => cubit.setAutoScrollForBook(
+                          sourceId,
+                          bookId,
+                          v,
+                        ),
                       ),
                     ],
                   ),
@@ -2386,38 +2422,124 @@ class _AutoScrollSheet extends StatelessWidget {
   }
 }
 
-/// Floating pause/play pill that overlays the reader when auto-scroll
-/// is enabled. Tap toggles pause; long-press opens the [_AutoScrollSheet]
-/// for live tuning without leaving the reader.
-class _AutoScrollFab extends StatelessWidget {
-  const _AutoScrollFab({
-    required this.paused,
-    required this.onTap,
-    required this.onLongPress,
-  });
-  final bool paused;
+/// Single-icon circular button that overlays the reader whenever
+/// auto-scroll is enabled. Draggable within the reader screen bounds;
+/// tapping opens the [_AutoScrollSheet] for live speed tuning.
+///
+/// Smoothness notes:
+///   * Position is held in a [ValueNotifier] so dragging doesn't trigger
+///     a [State.setState] / `LayoutBuilder` rebuild of the whole subtree
+///     every frame — only the inner [ValueListenableBuilder] rebuilds,
+///     and that wraps just the [Positioned] re-parent-data hop.
+///   * The visual uses a const [Container] with a [BoxDecoration] shadow
+///     instead of a [Material] with `elevation: 4`. `Material` shadow
+///     rasterisation showed up as the main cost on pan ticks.
+///   * Bounds come from the parent constraints once (via [LayoutBuilder]
+///     at the outermost level only) so we don't re-resolve them every
+///     drag frame.
+class _DraggableAutoScrollFab extends StatefulWidget {
+  const _DraggableAutoScrollFab({required this.onTap});
   final VoidCallback onTap;
-  final VoidCallback onLongPress;
+
+  @override
+  State<_DraggableAutoScrollFab> createState() =>
+      _DraggableAutoScrollFabState();
+}
+
+class _DraggableAutoScrollFabState extends State<_DraggableAutoScrollFab> {
+  static const double _size = 44;
+  static const double _margin = 16;
+
+  final ValueNotifier<Offset?> _offset = ValueNotifier<Offset?>(null);
+
+  @override
+  void dispose() {
+    _offset.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.black.withValues(alpha: 0.55),
-      shape: const CircleBorder(),
-      elevation: 4,
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: onTap,
-        onLongPress: onLongPress,
-        child: Container(
-          width: 44,
-          height: 44,
-          alignment: Alignment.center,
-          child: Icon(
-            paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-            color: Colors.white,
-            size: 24,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final h = constraints.maxHeight;
+        // Default to lower-right, computed once. Subsequent rebuilds
+        // (e.g. orientation change) keep the user's dragged position.
+        if (_offset.value == null && w > _size && h > _size) {
+          _offset.value = Offset(w - _size - _margin, h * 0.45);
+        }
+        final maxX = math.max(0.0, w - _size);
+        final maxY = math.max(0.0, h - _size);
+        // Transform.translate is paint-only — no Stack relayout per
+        // frame, no parent-data churn. The icon also sits inside its
+        // own RepaintBoundary so dragging doesn't invalidate the
+        // manga-page layer underneath. Together these cut the per-frame
+        // work from "relayout + repaint of the whole reader subtree"
+        // down to "compositor reuses the FAB's existing layer at a new
+        // transform offset" — what 60-90fps drag actually needs.
+        return ValueListenableBuilder<Offset?>(
+          valueListenable: _offset,
+          builder: (context, o, child) {
+            if (o == null) return const SizedBox.shrink();
+            return Transform.translate(
+              offset: o,
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  // Start the drag from the pointer-down location
+                  // (default is `start`, which waits for the slop
+                  // distance to be exceeded before the first
+                  // onPanUpdate fires — that's what makes the first
+                  // few millimetres of drag feel "stuck").
+                  dragStartBehavior: DragStartBehavior.down,
+                  onTap: widget.onTap,
+                  onPanUpdate: (d) {
+                    final next = o + d.delta;
+                    _offset.value = Offset(
+                      next.dx.clamp(0.0, maxX),
+                      next.dy.clamp(0.0, maxY),
+                    );
+                  },
+                  child: child,
+                ),
+              ),
+            );
+          },
+          // Const so this subtree is never rebuilt when the offset
+          // changes — Transform.translate is the only thing moving.
+          child: const RepaintBoundary(child: _AutoScrollFabIcon()),
+        );
+      },
+    );
+  }
+}
+
+class _AutoScrollFabIcon extends StatelessWidget {
+  const _AutoScrollFabIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 44,
+      height: 44,
+      decoration: const BoxDecoration(
+        color: Color(0x8C000000),
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: Color(0x55000000),
+            blurRadius: 6,
+            offset: Offset(0, 2),
           ),
+        ],
+      ),
+      child: const Center(
+        child: Icon(
+          Icons.play_circle_rounded,
+          color: AppColors.primary,
+          size: 26,
         ),
       ),
     );
