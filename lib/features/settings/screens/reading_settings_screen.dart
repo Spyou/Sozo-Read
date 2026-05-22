@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/di/injection.dart';
+import '../../../core/services/novel_tts_service.dart';
 import '../../../core/state/manga_prefs_cubit.dart';
 import '../../../core/state/notifications_prefs_cubit.dart';
 import '../../../core/state/novel_prefs_cubit.dart';
 import '../widgets/settings_dialogs.dart';
 import '../widgets/settings_widgets.dart';
+import '../widgets/voice_picker_sheet.dart';
 
 /// `/settings/reading` — split into MANGA and NOVEL sub-sections.
 class ReadingSettingsScreen extends StatelessWidget {
@@ -233,8 +236,29 @@ class ReadingSettingsScreen extends StatelessWidget {
                       subtitle: p.fontFamily,
                       onTap: () => openFontFamilySheet(context, p.fontFamily),
                     ),
+                    // TTS voice rate. Bounds picked to match the audible
+                    // range on Android+iOS: below 0.3 the engines start
+                    // dropping phonemes, above 0.8 they sound chipmunked.
+                    SettingsTile(
+                      icon: Icons.record_voice_over_outlined,
+                      title: 'TTS voice rate',
+                      subtitle: p.ttsRate.toStringAsFixed(2),
+                      onTap: () => openSliderDialog(
+                        context,
+                        title: 'TTS voice rate',
+                        value: p.ttsRate.clamp(0.3, 0.8),
+                        min: 0.3,
+                        max: 0.8,
+                        divisions: 10,
+                        formatter: (v) => v.toStringAsFixed(2),
+                        onChanged:
+                            context.read<NovelPrefsCubit>().setTtsRate,
+                      ),
+                    ),
                   ],
                 ),
+                const SettingsSectionLabel('Text-to-speech'),
+                _TtsSettingsCard(prefs: p),
                 // ------------------------------------------------------------
                 // Notifications. Lives in its own section near the bottom so
                 // it stays visually separate from the typography controls
@@ -266,6 +290,166 @@ class ReadingSettingsScreen extends StatelessWidget {
             );
           },
         ),
+      ),
+    );
+  }
+}
+
+/// TTS settings group. Sliders + switches all mirror their new value into
+/// the live [NovelTtsService] so a running playback session reacts the
+/// instant the user lets go of a thumb / toggles a switch.
+class _TtsSettingsCard extends StatelessWidget {
+  const _TtsSettingsCard({required this.prefs});
+
+  final NovelPrefs prefs;
+
+  @override
+  Widget build(BuildContext context) {
+    final cubit = context.read<NovelPrefsCubit>();
+    final entryCount = prefs.ttsPronunciations.length;
+    return SettingsCard(
+      children: [
+        SettingsTile(
+          icon: Icons.graphic_eq_rounded,
+          title: 'Voice',
+          subtitle: prefs.ttsVoiceName ?? 'Default for language',
+          onTap: () => VoicePickerSheet.show(context),
+        ),
+        _SliderTile(
+          icon: Icons.height_rounded,
+          title: 'Pitch',
+          value: prefs.ttsPitch,
+          min: 0.5,
+          max: 2.0,
+          divisions: 15,
+          formatter: (v) => v.toStringAsFixed(1),
+          onChanged: (v) {
+            cubit.setTtsPitch(v);
+            // ignore: discarded_futures
+            sl<NovelTtsService>().setPitch(v);
+          },
+        ),
+        _SliderTile(
+          icon: Icons.volume_up_rounded,
+          title: 'Volume',
+          value: prefs.ttsVolume,
+          min: 0.0,
+          max: 1.0,
+          divisions: 10,
+          formatter: (v) => '${(v * 100).round()}%',
+          onChanged: (v) {
+            cubit.setTtsVolume(v);
+            // ignore: discarded_futures
+            sl<NovelTtsService>().setVolume(v);
+          },
+        ),
+        SettingsTile(
+          icon: Icons.spellcheck_outlined,
+          title: 'Pronunciations',
+          subtitle: entryCount == 0 ? 'None' : '$entryCount entries',
+          onTap: () => context.push('/settings/tts/pronunciations'),
+        ),
+        SwitchListTile.adaptive(
+          secondary: const Icon(Icons.stop_circle_outlined),
+          title: const Text('Stop at chapter end'),
+          subtitle: const Text("Don't auto-advance to the next chapter"),
+          value: prefs.ttsStopAtChapterEnd,
+          onChanged: (v) {
+            cubit.setTtsStopAtChapterEnd(v);
+            sl<NovelTtsService>().setStopAtChapterEnd(v);
+          },
+        ),
+        SwitchListTile.adaptive(
+          secondary: const Icon(Icons.format_clear_rounded),
+          title: const Text('Skip dialogue / markup'),
+          subtitle: const Text('Strip tags and scene-break glyphs'),
+          value: prefs.ttsSkipMarkers,
+          onChanged: (v) {
+            cubit.setTtsSkipMarkers(v);
+            sl<NovelTtsService>().setSkipMarkers(v);
+          },
+        ),
+        _SliderTile(
+          icon: Icons.short_text_rounded,
+          title: 'Paragraph pause',
+          value: prefs.ttsParagraphPauseMs.toDouble(),
+          min: 0,
+          max: 2000,
+          divisions: 20,
+          formatter: (v) => '${v.round()} ms',
+          onChanged: (v) {
+            final ms = v.round();
+            cubit.setTtsParagraphPauseMs(ms);
+            sl<NovelTtsService>().setParagraphPauseMs(ms);
+          },
+        ),
+      ],
+    );
+  }
+}
+
+/// Inline slider row that fits the [SettingsCard] visual style. We keep
+/// this private to the screen so it stays out of the public widget API —
+/// other screens use the modal `openSliderDialog` pattern instead.
+class _SliderTile extends StatelessWidget {
+  const _SliderTile({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.divisions,
+    required this.formatter,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String title;
+  final double value;
+  final double min;
+  final double max;
+  final int divisions;
+  final String Function(double) formatter;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final muted = theme.textTheme.bodySmall?.color;
+    final clamped = value.clamp(min, max);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: muted, size: 22),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              Text(
+                formatter(clamped),
+                style: TextStyle(color: muted, fontSize: 13),
+              ),
+            ],
+          ),
+          Slider(
+            value: clamped,
+            min: min,
+            max: max,
+            divisions: divisions,
+            label: formatter(clamped),
+            onChanged: onChanged,
+          ),
+        ],
       ),
     );
   }

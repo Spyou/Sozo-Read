@@ -28,6 +28,11 @@
          chapter assets over the network. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- audio_service runs a separate foreground service of type
+         `mediaPlayback` so the novel-reader TTS keeps speaking with
+         the screen off and the OS shows lock-screen / notification
+         media controls. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
     <!-- App Lock biometric prompt. USE_BIOMETRIC covers Android 9+
          (the unified biometric API used by local_auth). USE_FINGERPRINT
@@ -35,6 +40,12 @@
          the same hardware. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.USE_FINGERPRINT" />
+
+    <!-- Auto-update from GitHub releases. REQUEST_INSTALL_PACKAGES lets us
+         launch the system installer with a content:// FileProvider URI on
+         Android 8+. Android still prompts the user once per app-source to
+         allow "Install unknown apps"; the Dart side handles the denial. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:label="Sozo Read"
@@ -140,6 +151,20 @@
             </intent-filter>
         </activity-alias>
 
+        <!-- FileProvider for the auto-updater. The Dart side downloads APKs
+             into <appCacheDir>/updates/; this provider hands the OS installer
+             a content:// URI rooted there. Android 7+ rejects file:// URIs
+             across process boundaries, so this is mandatory for >= API 24. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/filepaths" />
+        </provider>
+
         <!-- Foreground service registration for `flutter_background_service`.
              The plugin already declares this service (with
              `android:exported="true"`) inside its own manifest, so we
@@ -178,6 +203,12 @@
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" />
+        </intent>
+        <!-- Auto-updater: resolve the system package-installer activity so
+             ACTION_VIEW with a package-archive mime type can be launched. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/vnd.android.package-archive" />
         </intent>
     </queries>
 </manifest>

@@ -11,6 +11,7 @@ import '../../../core/provider/provider_registry.dart';
 import '../../../core/services/image_cache_manager.dart';
 import '../../../core/state/active_source_cubit.dart';
 import '../../../core/state/auth_service.dart';
+import '../../../core/state/auto_switch_prefs.dart';
 import '../../../core/state/novel_prefs_cubit.dart';
 import '../../../core/state/theme_cubit.dart';
 import '../../../core/utils/avatar_palette.dart';
@@ -105,6 +106,13 @@ class _SettingsView extends StatelessWidget {
                 subtitle: 'App Lock, Incognito, privacy',
                 onTap: () => context.push('/settings/security'),
               ),
+              SettingsTile(
+                icon: Icons.system_update_alt_rounded,
+                title: 'Updates',
+                subtitle: 'Check for new releases',
+                onTap: () => context.push('/settings/updates'),
+              ),
+              const _AutoSwitchTile(),
             ],
           ),
 
@@ -312,3 +320,36 @@ class _ProfileAvatar extends StatelessWidget {
   }
 }
 
+/// Configuration row that toggles the cross-source fallback flag. Reads
+/// directly from [AutoSwitchPrefs] (a thin Hive wrapper) — no cubit is
+/// needed since this is the only writer.
+class _AutoSwitchTile extends StatefulWidget {
+  const _AutoSwitchTile();
+
+  @override
+  State<_AutoSwitchTile> createState() => _AutoSwitchTileState();
+}
+
+class _AutoSwitchTileState extends State<_AutoSwitchTile> {
+  late final AutoSwitchPrefs _prefs = sl<AutoSwitchPrefs>();
+  late bool _enabled = _prefs.enabled();
+
+  Future<void> _toggle(bool v) async {
+    await _prefs.setEnabled(v);
+    if (mounted) setState(() => _enabled = v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SettingsTile(
+      icon: Icons.alt_route_rounded,
+      title: 'Auto-switch sources',
+      subtitle: 'On failure, try other sources',
+      onTap: () => _toggle(!_enabled),
+      trailing: Switch.adaptive(
+        value: _enabled,
+        onChanged: _toggle,
+      ),
+    );
+  }
+}

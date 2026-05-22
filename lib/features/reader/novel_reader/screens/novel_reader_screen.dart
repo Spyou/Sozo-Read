@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import '../../../../core/widgets/app_snack.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
@@ -11,6 +12,7 @@ import '../../../../core/di/injection.dart';
 import '../../../../core/models/book_detail.dart';
 import '../../../../core/repository/library_repository.dart';
 import '../../../../core/repository/provider_repository.dart';
+import '../../../../core/services/novel_tts_service.dart';
 import '../../../../core/state/novel_prefs_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/state_views.dart';
@@ -18,6 +20,7 @@ import '../../widgets/reading_bg_picker_sheet.dart';
 import '../widgets/dictionary_popup.dart';
 import '../widgets/draggable_auto_scroll_fab.dart';
 import '../widgets/font_picker_sheet.dart';
+import '../widgets/tts_control_sheet.dart';
 import '../bloc/novel_reader_bloc.dart';
 import '../bloc/novel_reader_event.dart';
 import '../bloc/novel_reader_state.dart';
@@ -64,6 +67,22 @@ class _NovelViewState extends State<_NovelView>
   StreamSubscription<NovelPrefs>? _prefsSub;
   StreamSubscription<NovelReaderState>? _readerStateSub;
 
+  // TTS auto-advance flag — set when the previous chapter ended via
+  // TTS and we fired the next-chapter event. The bloc listener watches
+  // for the matching status==success transition and re-loads the TTS
+  // queue with the fresh body text, then resumes playback.
+  bool _ttsAutoAdvancePending = false;
+  int? _lastReaderChapterIndex;
+
+  // Paragraph highlight state. The reader splits the chapter body into
+  // paragraph widgets and keeps one GlobalKey per paragraph so the TTS
+  // index subscription can scroll-into-view + tint the active one.
+  StreamSubscription<int>? _ttsParagraphSub;
+  int _ttsParagraphIndex = -1;
+  List<String> _paragraphs = const [];
+  List<GlobalKey> _paragraphKeys = const [];
+  String? _splitForText;
+
   @override
   void initState() {
     super.initState();
@@ -74,8 +93,33 @@ class _NovelViewState extends State<_NovelView>
       if (!mounted) return;
       _evaluateAutoScroll();
     });
+    _ttsParagraphSub =
+        sl<NovelTtsService>().paragraphIndexStream.listen((i) {
+      if (!mounted) return;
+      if (i == _ttsParagraphIndex) return;
+      setState(() => _ttsParagraphIndex = i);
+      // Defer to next frame so the rebuilt paragraph widget has a
+      // RenderBox to scroll into view.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollToParagraph(i);
+      });
+    });
     _readerStateSub = readerBloc.stream.listen((s) {
       if (!mounted) return;
+      // TTS auto-advance: previous chapter finished speaking, we asked
+      // the bloc to load the next one, and now the body text is ready —
+      // hand it back to the TTS service and resume playback. Compare
+      // against `_lastReaderChapterIndex` so we only fire once per
+      // chapter swap, not every progress / resume emission.
+      if (_ttsAutoAdvancePending &&
+          s.status == NovelReaderStatus.success &&
+          s.book != null &&
+          s.chapterIndex != _lastReaderChapterIndex) {
+        _ttsAutoAdvancePending = false;
+        _lastReaderChapterIndex = s.chapterIndex;
+        _loadTtsForCurrentChapter(s, autoPlay: true);
+      }
+      _lastReaderChapterIndex = s.chapterIndex;
       final key = s.book == null
           ? null
           : NovelPrefsCubit.bookKey(s.book!.sourceId, s.book!.id);
@@ -85,10 +129,157 @@ class _NovelViewState extends State<_NovelView>
     });
   }
 
+  /// Push the reader state's current chapter into the TTS service.
+  /// `autoPlay=true` is used after an auto-advance so the chapter
+  /// boundary doesn't pause speech.
+  void _loadTtsForCurrentChapter(
+    NovelReaderState s, {
+    bool autoPlay = false,
+    int startParagraph = 0,
+  }) {
+    final book = s.book;
+    if (book == null || book.chapters.isEmpty) return;
+    final chapter = book.chapters[s.chapterIndex];
+    final tts = sl<NovelTtsService>();
+    final prefsCubit = context.read<NovelPrefsCubit>();
+    // Reapply the persisted rate every load — the previous chapter may
+    // have used a different rate if the user dragged the slider mid-
+    // playback (only an issue across cold restarts in practice).
+    // ignore: discarded_futures
+    tts.setRate(prefsCubit.resolveTtsRateFor(book.sourceId, book.id));
+    // ignore: discarded_futures
+    tts
+        .loadChapter(
+      bookTitle: book.title,
+      chapterTitle: chapter.title,
+      text: s.text,
+      onChapterEnd: _onTtsChapterEnd,
+      startParagraph: startParagraph,
+    )
+        .then((_) {
+      if (autoPlay) {
+        // ignore: discarded_futures
+        tts.play();
+      }
+    });
+  }
+
+  /// Split the chapter body into paragraphs once per chapter swap and
+  /// allocate one GlobalKey per paragraph. Mirrors the heuristic used
+  /// by the TTS service so paragraph indices stay aligned.
+  void _ensureParagraphsFor(String text) {
+    if (_splitForText == text) return;
+    _splitForText = text;
+    _paragraphs = text
+        .split(RegExp(r'\n\s*\n+'))
+        .map((p) => p.trim())
+        .where((p) => p.isNotEmpty)
+        .toList(growable: false);
+    _paragraphKeys = List<GlobalKey>.generate(
+      _paragraphs.length,
+      (_) => GlobalKey(),
+      growable: false,
+    );
+    _ttsParagraphIndex = -1;
+  }
+
+  /// Walks the paragraph render boxes and returns the first whose top
+  /// edge is at or below the scroll viewport's current top. Used as the
+  /// resume hint passed to `loadChapter(startParagraph:)`.
+  int _firstVisibleParagraphIndex() {
+    if (_paragraphKeys.isEmpty) return 0;
+    if (!_scroll.hasClients) return 0;
+    final viewportTop = _scroll.offset;
+    for (var i = 0; i < _paragraphKeys.length; i++) {
+      final ctx = _paragraphKeys[i].currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject();
+      if (box is! RenderBox) continue;
+      // Translate the paragraph's top into the scroll view's content
+      // coordinate space by subtracting the viewport's screen origin.
+      final paraTop = box.localToGlobal(Offset.zero).dy;
+      final viewport = _scroll.position.context.notificationContext
+              ?.findRenderObject();
+      double anchor = 0;
+      if (viewport is RenderBox) {
+        anchor = viewport.localToGlobal(Offset.zero).dy;
+      }
+      final relative = paraTop - anchor + viewportTop;
+      if (relative >= viewportTop - 1) return i;
+    }
+    return _paragraphKeys.length - 1;
+  }
+
+  /// Scrolls the paragraph at [i] into the upper third of the
+  /// viewport with a 250ms ease.
+  void _scrollToParagraph(int i) {
+    if (i < 0 || i >= _paragraphKeys.length) return;
+    final ctx = _paragraphKeys[i].currentContext;
+    if (ctx == null) return;
+    // ignore: discarded_futures
+    Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOut,
+      alignment: 0.3,
+    );
+  }
+
+  /// Fired by the TTS service after the last paragraph of the current
+  /// chapter completes. Mirrors the ascending heuristic used by
+  /// `_evaluateAutoScroll` so the next-chapter index lines up with the
+  /// provider's ordering.
+  void _onTtsChapterEnd() {
+    if (!mounted) return;
+    final bloc = context.read<NovelReaderBloc>();
+    final s = bloc.state;
+    final book = s.book;
+    if (book == null) return;
+    final ascending = book.chapters.length >= 2 &&
+        ((book.chapters.last.number ?? 0) >
+            (book.chapters.first.number ?? 0));
+    final delta = ascending ? 1 : -1;
+    final next = s.chapterIndex + delta;
+    if (next < 0 || next >= book.chapters.length) return;
+    _ttsAutoAdvancePending = true;
+    bloc.add(NovelReaderChapterChanged(next));
+  }
+
+  /// Tap handler for the "Read aloud" row in the reader settings sheet.
+  ///
+  /// Three cases:
+  ///   1. TTS is already loaded with THIS book+chapter → just open the
+  ///      sheet. Whatever state TTS is in (paused mid-paragraph, ready
+  ///      at the start, etc.) is preserved; the play button resumes
+  ///      from there.
+  ///   2. TTS is idle OR loaded with a different chapter → call
+  ///      loadChapter with the resume hint (first visible paragraph in
+  ///      the viewport). Open sheet — user taps Play to start.
+  /// We do NOT auto-play; the sheet's Play button is the user's
+  /// affordance.
+  Future<void> _onTtsTap(BuildContext context) async {
+    final s = context.read<NovelReaderBloc>().state;
+    final book = s.book;
+    if (book == null || book.chapters.isEmpty || s.text.isEmpty) return;
+    _lastReaderChapterIndex = s.chapterIndex;
+    final tts = sl<NovelTtsService>();
+    final chapter = book.chapters[s.chapterIndex];
+    final wantedId = '${book.title}::${chapter.title}';
+    final currentId = tts.mediaItem.valueOrNull?.id;
+    final sameChapterAlreadyLoaded =
+        currentId == wantedId && tts.paragraphCount > 0;
+    if (!sameChapterAlreadyLoaded) {
+      final start = _firstVisibleParagraphIndex();
+      _loadTtsForCurrentChapter(s, autoPlay: false, startParagraph: start);
+    }
+    await TtsControlSheet.show(context);
+  }
+
   @override
   void dispose() {
     _prefsSub?.cancel();
     _readerStateSub?.cancel();
+    _ttsParagraphSub?.cancel();
     _autoScrollTicker?.dispose();
     _scroll.dispose();
     super.dispose();
@@ -185,6 +376,7 @@ class _NovelViewState extends State<_NovelView>
   Future<void> _openSettings(BuildContext context) async {
     final prefsCubit = context.read<NovelPrefsCubit>();
     final book = context.read<NovelReaderBloc>().state.book;
+    final outerContext = context;
     await showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -195,6 +387,10 @@ class _NovelViewState extends State<_NovelView>
           child: _NovelSettingsSheet(
             sourceId: book?.sourceId,
             bookId: book?.id,
+            // The reader settings sheet doesn't sit inside the
+            // NovelReaderBloc's provider scope; route TTS through this
+            // callback so the sheet doesn't need to look up the bloc.
+            onLaunchTts: () => _onTtsTap(outerContext),
           ),
         );
       },
@@ -287,6 +483,10 @@ class _NovelViewState extends State<_NovelView>
             color: fg,
             onPressed: () => context.read<NovelPrefsCubit>().bumpFontSize(1),
           ),
+          // TTS lives in the Reader Settings sheet — see the "Read
+          // aloud" row inside _NovelSettingsSheet. Kept here as a
+          // comment so future readers don't try to add it back without
+          // checking the sheet.
           IconButton(
             icon: const Icon(Icons.tune_rounded),
             color: fg,
@@ -375,6 +575,17 @@ class _NovelViewState extends State<_NovelView>
                   },
                   child: BlocBuilder<NovelPrefsCubit, NovelPrefs>(
                     builder: (context, prefs) {
+                      _ensureParagraphsFor(state.text);
+                      final textStyle = NovelPrefsCubit.applyFontLabel(
+                        context
+                            .read<NovelPrefsCubit>()
+                            .resolveFontFor(book.sourceId, book.id),
+                        TextStyle(
+                          fontSize: prefs.fontSize,
+                          height: prefs.lineHeight,
+                          color: fg,
+                        ),
+                      );
                       return SingleChildScrollView(
                         controller: _scroll,
                         padding: EdgeInsets.fromLTRB(
@@ -393,52 +604,13 @@ class _NovelViewState extends State<_NovelView>
                                     style: theme.textTheme.headlineSmall
                                         ?.copyWith(color: fg)),
                               ),
-                            SelectableText(
-                              state.text,
-                              style: NovelPrefsCubit.applyFontLabel(
-                                context
-                                    .read<NovelPrefsCubit>()
-                                    .resolveFontFor(
-                                        book.sourceId, book.id),
-                                TextStyle(
-                                  fontSize: prefs.fontSize,
-                                  height: prefs.lineHeight,
-                                  color: fg,
-                                ),
+                            for (var i = 0; i < _paragraphs.length; i++)
+                              _ParagraphView(
+                                key: _paragraphKeys[i],
+                                text: _paragraphs[i],
+                                style: textStyle,
+                                highlighted: i == _ttsParagraphIndex,
                               ),
-                              // Inject a "Look up" item as the FIRST
-                              // entry in the long-press context menu so
-                              // it doesn't get pushed into Android's
-                              // 3-dot overflow on narrow screens.
-                              // Falls through to the default copy /
-                              // share menu when nothing is selected.
-                              contextMenuBuilder: (ctx, editableState) {
-                                final entries = <ContextMenuButtonItem>[];
-                                final selected = editableState
-                                    .textEditingValue.selection
-                                    .textInside(state.text)
-                                    .trim();
-                                if (selected.isNotEmpty &&
-                                    selected.length <= 60) {
-                                  entries.add(ContextMenuButtonItem(
-                                    label: 'Look up',
-                                    onPressed: () {
-                                      ContextMenuController
-                                          .removeAny();
-                                      showDictionaryPopup(ctx, selected);
-                                    },
-                                  ));
-                                }
-                                entries.addAll(
-                                    editableState.contextMenuButtonItems);
-                                return AdaptiveTextSelectionToolbar
-                                    .buttonItems(
-                                  anchors:
-                                      editableState.contextMenuAnchors,
-                                  buttonItems: entries,
-                                );
-                              },
-                            ),
                           ],
                         ),
                       );
@@ -451,6 +623,69 @@ class _NovelViewState extends State<_NovelView>
           );
         },
       );
+  }
+}
+
+/// Single paragraph widget rendered in the novel body. Keeps its own
+/// `SelectableText` so long-press dictionary lookup keeps working, and
+/// tints itself when [highlighted] (driven by the TTS paragraph index).
+class _ParagraphView extends StatelessWidget {
+  const _ParagraphView({
+    super.key,
+    required this.text,
+    required this.style,
+    required this.highlighted,
+  });
+
+  final String text;
+  final TextStyle style;
+  final bool highlighted;
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = highlighted
+        ? AppColors.primary.withValues(alpha: 0.15)
+        : Colors.transparent;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(10, 6, 6, 6),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+        border: Border(
+          left: BorderSide(
+            color: highlighted ? AppColors.primary : Colors.transparent,
+            width: 3,
+          ),
+        ),
+      ),
+      child: SelectableText(
+        text,
+        style: style,
+        contextMenuBuilder: (ctx, editableState) {
+          final entries = <ContextMenuButtonItem>[];
+          final selected = editableState.textEditingValue.selection
+              .textInside(text)
+              .trim();
+          if (selected.isNotEmpty && selected.length <= 60) {
+            entries.add(ContextMenuButtonItem(
+              label: 'Look up',
+              onPressed: () {
+                ContextMenuController.removeAny();
+                showDictionaryPopup(ctx, selected);
+              },
+            ));
+          }
+          entries.addAll(editableState.contextMenuButtonItems);
+          return AdaptiveTextSelectionToolbar.buttonItems(
+            anchors: editableState.contextMenuAnchors,
+            buttonItems: entries,
+          );
+        },
+      ),
+    );
   }
 }
 
@@ -660,9 +895,14 @@ class _NovelAutoScrollSheet extends StatelessWidget {
 }
 
 class _NovelSettingsSheet extends StatelessWidget {
-  const _NovelSettingsSheet({this.sourceId, this.bookId});
+  const _NovelSettingsSheet({
+    this.sourceId,
+    this.bookId,
+    this.onLaunchTts,
+  });
   final String? sourceId;
   final String? bookId;
+  final VoidCallback? onLaunchTts;
 
   bool get _hasBook =>
       sourceId != null && bookId != null && sourceId!.isNotEmpty;
@@ -841,12 +1081,299 @@ class _NovelSettingsSheet extends StatelessWidget {
                         v,
                       ),
                     ),
+                  // Read-aloud (TTS). Tapping closes this sheet, kicks
+                  // off TTS for the current chapter, and opens the
+                  // dedicated TTS Control sheet (play/pause + paragraph
+                  // skip + speed lives in the OS notification too).
+                  if (_hasBook)
+                    StreamBuilder<PlaybackState>(
+                      stream: sl<NovelTtsService>().playbackState,
+                      builder: (_, snap) {
+                        final playing = snap.data?.playing ?? false;
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(
+                            playing
+                                ? Icons.headphones
+                                : Icons.headphones_outlined,
+                            color: playing
+                                ? AppColors.primary
+                                : AppColors.textSecondary,
+                          ),
+                          title: const Text(
+                            'Read aloud',
+                            style: TextStyle(
+                              color: AppColors.textPrimary,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          subtitle: Text(
+                            playing
+                                ? 'Playing — tap for controls'
+                                : 'Text-to-speech this chapter',
+                            style: const TextStyle(
+                              color: AppColors.textSecondary,
+                              fontSize: 12,
+                            ),
+                          ),
+                          trailing: const Icon(
+                            Icons.chevron_right_rounded,
+                            color: AppColors.textTertiary,
+                          ),
+                          onTap: onLaunchTts == null
+                              ? null
+                              : () {
+                                  // Close the settings sheet first so
+                                  // the TTS Control sheet replaces it
+                                  // cleanly.
+                                  Navigator.of(context).pop();
+                                  onLaunchTts!.call();
+                                },
+                        );
+                      },
+                    ),
+                  // Voice & language picker. Subtitle shows the
+                  // resolved voice or "Default" when no override is set.
+                  if (_hasBook)
+                    Builder(builder: (rowCtx) {
+                      final voice = cubit
+                          .resolveTtsVoiceFor(sourceId!, bookId!)
+                          .trim();
+                      final subtitle = voice.isEmpty ? 'Default' : voice;
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(
+                          Icons.record_voice_over_outlined,
+                          color: AppColors.textSecondary,
+                        ),
+                        title: const Text(
+                          'Voice & language',
+                          style: TextStyle(
+                            color: AppColors.textPrimary,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        subtitle: Text(
+                          subtitle,
+                          style: const TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
+                        trailing: const Icon(
+                          Icons.chevron_right_rounded,
+                          color: AppColors.textTertiary,
+                        ),
+                        onTap: () => _NovelVoicePickerSheet.show(
+                          rowCtx,
+                          sourceId: sourceId!,
+                          bookId: bookId!,
+                        ),
+                      );
+                    }),
                 ],
               );
             },
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Minimal inline voice picker bottom sheet. Lists the device's
+/// available voices grouped by locale; tapping one writes the override
+/// via `setTtsVoiceForBook`. "Default" clears the per-book override.
+class _NovelVoicePickerSheet extends StatefulWidget {
+  const _NovelVoicePickerSheet({
+    required this.sourceId,
+    required this.bookId,
+  });
+
+  final String sourceId;
+  final String bookId;
+
+  static Future<void> show(
+    BuildContext context, {
+    required String sourceId,
+    required String bookId,
+  }) {
+    final prefsCubit = context.read<NovelPrefsCubit>();
+    return showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => BlocProvider.value(
+        value: prefsCubit,
+        child: _NovelVoicePickerSheet(
+          sourceId: sourceId,
+          bookId: bookId,
+        ),
+      ),
+    );
+  }
+
+  @override
+  State<_NovelVoicePickerSheet> createState() =>
+      _NovelVoicePickerSheetState();
+}
+
+class _NovelVoicePickerSheetState extends State<_NovelVoicePickerSheet> {
+  Future<List<Map<String, String>>>? _voicesFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _voicesFuture = sl<NovelTtsService>().availableVoices();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocBuilder<NovelPrefsCubit, NovelPrefs>(
+      builder: (context, prefs) {
+        final cubit = context.read<NovelPrefsCubit>();
+        final selected =
+            cubit.resolveTtsVoiceFor(widget.sourceId, widget.bookId);
+        return DraggableScrollableSheet(
+          initialChildSize: 0.6,
+          maxChildSize: 0.9,
+          minChildSize: 0.4,
+          expand: false,
+          builder: (_, scrollController) => Container(
+            decoration: const BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+            ),
+            child: SafeArea(
+              top: false,
+              child: Column(
+                children: [
+                  const SizedBox(height: 10),
+                  Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: AppColors.textTertiary.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(20, 12, 20, 8),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Voice for this book',
+                        style: TextStyle(
+                          color: AppColors.textPrimary,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: FutureBuilder<List<Map<String, String>>>(
+                      future: _voicesFuture,
+                      builder: (_, snap) {
+                        if (snap.connectionState != ConnectionState.done) {
+                          return const Center(
+                            child: CircularProgressIndicator(
+                                color: AppColors.primary),
+                          );
+                        }
+                        final voices = snap.data ?? const [];
+                        return ListView.builder(
+                          controller: scrollController,
+                          itemCount: voices.length + 1,
+                          itemBuilder: (_, i) {
+                            if (i == 0) {
+                              final isDefault = selected.isEmpty;
+                              return ListTile(
+                                leading: Icon(
+                                  isDefault
+                                      ? Icons.radio_button_checked
+                                      : Icons.radio_button_unchecked,
+                                  color: isDefault
+                                      ? AppColors.primary
+                                      : AppColors.textSecondary,
+                                ),
+                                title: const Text(
+                                  'Default',
+                                  style: TextStyle(
+                                    color: AppColors.textPrimary,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                subtitle: const Text(
+                                  'Use the global voice',
+                                  style: TextStyle(
+                                    color: AppColors.textSecondary,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                                onTap: () {
+                                  cubit.setTtsVoiceForBook(
+                                    widget.sourceId,
+                                    widget.bookId,
+                                    null,
+                                  );
+                                  Navigator.pop(context);
+                                },
+                              );
+                            }
+                            final v = voices[i - 1];
+                            final name = v['name'] ?? '';
+                            final locale = v['locale'] ?? '';
+                            final isSel = selected == name;
+                            return ListTile(
+                              leading: Icon(
+                                isSel
+                                    ? Icons.radio_button_checked
+                                    : Icons.radio_button_unchecked,
+                                color: isSel
+                                    ? AppColors.primary
+                                    : AppColors.textSecondary,
+                              ),
+                              title: Text(
+                                name,
+                                style: const TextStyle(
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                              subtitle: Text(
+                                locale,
+                                style: const TextStyle(
+                                  color: AppColors.textSecondary,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              onTap: () async {
+                                cubit.setTtsVoiceForBook(
+                                  widget.sourceId,
+                                  widget.bookId,
+                                  name,
+                                );
+                                // Push the override into the engine
+                                // immediately so the next paragraph
+                                // uses it without waiting for a chapter
+                                // reload.
+                                await sl<NovelTtsService>().setVoice(v);
+                                if (context.mounted) Navigator.pop(context);
+                              },
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

@@ -15,6 +15,7 @@ import 'provider/provider_repo_registry.dart';
 import 'repository/book_detail_cache.dart';
 import 'repository/categories_repository.dart';
 import 'repository/chapter_bookmarks_repository.dart';
+import 'repository/cross_source_match_cache.dart';
 import 'repository/dictionary_repository.dart';
 import 'repository/chapter_thumbnails_repository.dart';
 import 'repository/downloads_repository.dart';
@@ -29,9 +30,12 @@ import 'provider/provider_manager.dart';
 import 'repository/tracker_repository.dart';
 import 'security/app_lock_cubit.dart';
 import 'services/changelog_service.dart';
+import 'package:audio_service/audio_service.dart';
+
 import 'services/download_notification_service.dart';
 import 'services/downloads_background_service.dart';
 import 'services/notification_service.dart';
+import 'services/novel_tts_service.dart';
 import 'trackers/anilist/anilist_tracker.dart';
 import 'trackers/mal/mal_tracker.dart';
 import 'state/active_source_cubit.dart';
@@ -75,6 +79,7 @@ class AppBootstrap {
     await NotificationsRepository.init();
     await DictionaryRepository.init();
     await BookDetailCache.init();
+    await CrossSourceMatchCache.init();
     await ProviderSettingsRepository.init();
     await TrackerRepository.init();
     await ActiveSourceCubit.init();
@@ -162,6 +167,47 @@ class AppBootstrap {
     // becomes non-empty and back off when it drains. iOS gets the
     // plugin's default ~30s background grace.
     await DownloadsBackgroundService.initialize();
+
+    // Register the novel-reader TTS handler with the OS media session
+    // so the play/pause/skip controls show up on the lock screen and
+    // notification shade. Best-effort: in test runners (no native
+    // platform channel) this throws — swallow so the rest of bootstrap
+    // continues.
+    try {
+      await AudioService.init(
+        builder: () => sl<NovelTtsService>(),
+        config: const AudioServiceConfig(
+          androidNotificationChannelId: 'com.spyou.sozo_manga.tts',
+          androidNotificationChannelName: 'Novel Text-to-Speech',
+          androidNotificationOngoing: true,
+          androidStopForegroundOnPause: true,
+        ),
+      );
+    } catch (e) {
+      debugPrint('[bootstrap] AudioService.init failed: $e');
+    }
+
+    // Push the user's persisted novel-TTS preferences into the service
+    // so the very first speak() call honours them (pitch / volume /
+    // language are async on Android — without this seed, the first
+    // chapter plays at engine defaults until the user touches a slider).
+    try {
+      final prefsCubit = sl<NovelPrefsCubit>();
+      final prefs = prefsCubit.state;
+      final tts = sl<NovelTtsService>();
+      // ignore: discarded_futures
+      tts.setLanguage(prefs.ttsLanguage);
+      // ignore: discarded_futures
+      tts.setPitch(prefs.ttsPitch);
+      // ignore: discarded_futures
+      tts.setVolume(prefs.ttsVolume);
+      tts.setSkipMarkers(prefs.ttsSkipMarkers);
+      tts.setParagraphPauseMs(prefs.ttsParagraphPauseMs);
+      tts.setStopAtChapterEnd(prefs.ttsStopAtChapterEnd);
+      tts.setPronunciations(prefs.ttsPronunciations);
+    } catch (e) {
+      debugPrint('[bootstrap] TTS pref seeding failed: $e');
+    }
 
     // Persistent system notification that mirrors the active queue.
     // Attaches its own Hive box subscription; cheap to start even

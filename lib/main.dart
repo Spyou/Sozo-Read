@@ -4,16 +4,19 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:hive/hive.dart';
 
 import 'core/app_bootstrap.dart';
 import 'core/di/injection.dart';
 import 'core/router/app_router.dart' show buildRouter, parseSozoReadDeepLink;
 import 'core/security/app_lock_cubit.dart';
 import 'core/services/chapter_check_service.dart';
+import 'core/services/update_service.dart';
 import 'core/state/incognito_cubit.dart';
 import 'core/state/theme_cubit.dart';
 import 'core/theme/app_theme.dart';
 import 'features/lock/lock_screen.dart';
+import 'features/settings/widgets/update_available_sheet.dart';
 import 'features/settings/widgets/whats_new_sheet.dart';
 
 void main() async {
@@ -82,6 +85,7 @@ class _SozoReadAppState extends State<SozoReadApp> with WidgetsBindingObserver {
       _maybeCheckNewChapters();
       _initDeepLinks();
       _maybeShowWhatsNew();
+      _maybeCheckForUpdate();
     });
   }
 
@@ -93,6 +97,39 @@ class _SozoReadAppState extends State<SozoReadApp> with WidgetsBindingObserver {
     if (ctx == null) return;
     // ignore: discarded_futures
     WhatsNewSheet.showIfPending(ctx);
+  }
+
+  /// Background self-update check. Respects the user's auto-check + beta
+  /// prefs and a 6h throttle so re-foregrounding doesn't refetch. Fire-
+  /// and-forget — failures are silent (the manual "Check now" button
+  /// surfaces the error).
+  void _maybeCheckForUpdate() {
+    // ignore: discarded_futures
+    () async {
+      try {
+        final box = Hive.box('settings');
+        final autoCheck =
+            (box.get(UpdateService.kAutoCheck) as bool?) ?? true;
+        if (!autoCheck) return;
+        final lastMs = box.get(UpdateService.kLastCheckMs);
+        if (lastMs is int) {
+          final since = DateTime.now().millisecondsSinceEpoch - lastMs;
+          if (since < const Duration(hours: 6).inMilliseconds) return;
+        }
+        final beta =
+            (box.get(UpdateService.kBetaChannel) as bool?) ?? false;
+        final service = sl<UpdateService>();
+        final release = await service.checkForUpdate(includeBeta: beta);
+        await service.markCheckedNow();
+        if (release == null) return;
+        if (!service.shouldPrompt(release)) return;
+        final ctx = _router.routerDelegate.navigatorKey.currentContext;
+        if (ctx == null || !ctx.mounted) return;
+        await UpdateAvailableSheet.show(ctx, release);
+      } catch (_) {
+        // Auto-check is best-effort; the Updates screen has a manual retry.
+      }
+    }();
   }
 
   @override

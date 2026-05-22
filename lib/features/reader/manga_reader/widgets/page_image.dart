@@ -13,6 +13,7 @@ import 'package:saver_gallery/saver_gallery.dart';
 
 import '../../../../core/di/injection.dart';
 import '../../../../core/models/page_content.dart';
+import '../../../../core/repository/downloads_repository.dart';
 import '../../../../core/repository/page_bookmarks_repository.dart';
 import '../../../../core/state/manga_prefs_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -177,9 +178,13 @@ class _PageImageState extends State<PageImage> {
 
   Future<void> _openLongPressMenu() async {
     final url = widget.page.url;
-    // Local-file URLs (offline-downloaded pages) don't make sense to
-    // re-save or open via URL — skip the menu entirely.
-    if (url.startsWith('file://') || url.startsWith('/')) return;
+    // Local-file URLs (offline-downloaded pages, internal or SAF) don't
+    // make sense to re-save or open via URL — skip the menu entirely.
+    if (url.startsWith('file://') ||
+        url.startsWith('/') ||
+        url.startsWith('content://')) {
+      return;
+    }
     // Tactile feedback so the long-press registration is obvious — the
     // bottom sheet animation alone is easy to miss while reading.
     HapticFeedback.mediumImpact();
@@ -459,7 +464,10 @@ class _PageImageState extends State<PageImage> {
     final exhausted = _attempt >= _maxAutoRetries && _lastError != null;
 
     // Local-file fast-path: the manga reader bloc rewrites downloaded pages
-    // with a `file://...` URL. Render with Image.file (no network, no cache).
+    // with either a `file://...` URL (internal storage) or a plain
+    // `content://` SAF document URI (user-picked storage location). The
+    // former renders straight from disk; the latter needs a one-shot byte
+    // read via the platform channel.
     final url = widget.page.url;
     if (url.startsWith('file://') || url.startsWith('/')) {
       final path = url.startsWith('file://') ? url.substring(7) : url;
@@ -479,6 +487,62 @@ class _PageImageState extends State<PageImage> {
       return GestureDetector(
         onLongPress: _openLongPressMenu,
         child: _applyTransforms(fileWidget, prefs),
+      );
+    }
+    if (url.startsWith('content://')) {
+      // SAF byte read per page. The bytes-future is built fresh on each
+      // build but resolves from the OS-level page cache after the first
+      // hit, so re-scroll is roughly free; if perf becomes an issue we
+      // can copy the bytes to an in-app LRU disk cache the way
+      // CachedNetworkImage does.
+      final safWidget = FutureBuilder<Uint8List>(
+        future: DownloadsRepository.readHandle(url),
+        builder: (ctx, snap) {
+          if (snap.connectionState != ConnectionState.done) {
+            return AspectRatio(
+              aspectRatio: 2 / 3,
+              child: Container(
+                color: AppColors.card,
+                alignment: Alignment.center,
+                child: const SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: AppColors.primary),
+                ),
+              ),
+            );
+          }
+          if (snap.hasError || snap.data == null) {
+            return AspectRatio(
+              aspectRatio: 2 / 3,
+              child: Container(
+                color: AppColors.card,
+                alignment: Alignment.center,
+                child: const Icon(Icons.broken_image,
+                    color: AppColors.textTertiary, size: 36),
+              ),
+            );
+          }
+          return Image.memory(
+            snap.data!,
+            fit: widget.fit,
+            gaplessPlayback: true,
+            errorBuilder: (_, err, _) => AspectRatio(
+              aspectRatio: 2 / 3,
+              child: Container(
+                color: AppColors.card,
+                alignment: Alignment.center,
+                child: const Icon(Icons.broken_image,
+                    color: AppColors.textTertiary, size: 36),
+              ),
+            ),
+          );
+        },
+      );
+      return GestureDetector(
+        onLongPress: _openLongPressMenu,
+        child: _applyTransforms(safWidget, prefs),
       );
     }
 

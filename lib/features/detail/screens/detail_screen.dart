@@ -21,12 +21,15 @@ import '../../../core/models/provider_info.dart';
 import '../../../core/repository/book_detail_cache.dart';
 import '../../../core/repository/chapter_bookmarks_repository.dart';
 import '../../../core/repository/chapter_thumbnails_repository.dart';
+import '../../../core/repository/cross_source_match_cache.dart';
 import '../../../core/repository/downloads_repository.dart';
 import '../../../core/repository/library_repository.dart';
 import '../../../core/repository/page_bookmarks_repository.dart';
 import '../../../core/repository/provider_repository.dart';
 import '../../../core/repository/read_chapters_repository.dart';
+import '../../../core/services/cross_source_matcher.dart';
 import '../../../core/state/auth_service.dart';
+import '../../../core/state/auto_switch_prefs.dart';
 import '../../../core/state/chapter_sort_cubit.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/book_card.dart';
@@ -51,6 +54,9 @@ class DetailScreen extends StatelessWidget {
         libraryRepo: sl<LibraryRepository>(),
         readChaptersRepo: sl<ReadChaptersRepository>(),
         cache: sl<BookDetailCache>(),
+        matcher: sl<CrossSourceMatcher>(),
+        matchCache: sl<CrossSourceMatchCache>(),
+        autoSwitch: sl<AutoSwitchPrefs>(),
       )..add(DetailLoaded(
           sourceId: sourceId,
           url: url,
@@ -139,35 +145,94 @@ class _DetailView extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: BlocBuilder<DetailBloc, DetailState>(
-        builder: (context, state) {
-          if (state.status == DetailStatus.loading && state.book == null) {
-            return _SkeletonDetail(placeholder: placeholder);
-          }
-          if (state.status == DetailStatus.error && state.book == null) {
-            return ErrorView(
-              message: state.error ?? 'Failed to load',
-              onRetry: () => context.read<DetailBloc>().add(const DetailReloaded()),
+      // Listen for cross-source fallback suggestions and surface them as
+      // a snackbar with Switch / Cancel actions. The bloc only emits this
+      // when the user has opted in via AutoSwitchPrefs.
+      body: BlocListener<DetailBloc, DetailState>(
+        listenWhen: (prev, curr) =>
+            prev.fallbackSuggestion != curr.fallbackSuggestion &&
+            curr.fallbackSuggestion != null,
+        listener: (ctx, state) => _showFallbackSnack(ctx, state),
+        child: BlocBuilder<DetailBloc, DetailState>(
+          builder: (context, state) {
+            if (state.status == DetailStatus.loading && state.book == null) {
+              return _SkeletonDetail(placeholder: placeholder);
+            }
+            if (state.status == DetailStatus.error && state.book == null) {
+              return ErrorView(
+                message: state.error ?? 'Failed to load',
+                onRetry: () =>
+                    context.read<DetailBloc>().add(const DetailReloaded()),
+              );
+            }
+            final book = state.book;
+            if (book == null) return const LoadingView();
+            return _DetailBody(
+              book: book,
+              inLibrary: state.inLibrary,
+              lastChapterIndex: state.library?.lastChapterIndex ?? 0,
+              readChapterIds: state.readChapterIds,
+              similar: state.similar,
+              similarLoading: state.similarStatus == SimilarStatus.loading,
+              onToggleLibrary: () => _handleToggleLibrary(context),
+              onShare: () => _handleShare(context, book),
+              onOpenChapter: (i) => _openReader(context, book, i),
+              onOpenChapterAtPage: (i, page) =>
+                  _openReader(context, book, i, initialPageIndex: page),
             );
-          }
-          final book = state.book;
-          if (book == null) return const LoadingView();
-          return _DetailBody(
-            book: book,
-            inLibrary: state.inLibrary,
-            lastChapterIndex: state.library?.lastChapterIndex ?? 0,
-            readChapterIds: state.readChapterIds,
-            similar: state.similar,
-            similarLoading: state.similarStatus == SimilarStatus.loading,
-            onToggleLibrary: () => _handleToggleLibrary(context),
-            onShare: () => _handleShare(context, book),
-            onOpenChapter: (i) => _openReader(context, book, i),
-            onOpenChapterAtPage: (i, page) =>
-                _openReader(context, book, i, initialPageIndex: page),
-          );
-        },
+          },
+        ),
       ),
     );
+  }
+
+  void _showFallbackSnack(BuildContext context, DetailState state) {
+    final s = state.fallbackSuggestion;
+    if (s == null) return;
+    final bloc = context.read<DetailBloc>();
+    var actionTaken = false;
+    final messenger = ScaffoldMessenger.of(context);
+    final ctrl = messenger.showAppSnack(
+      SnackBar(
+        duration: const Duration(seconds: 8),
+        content: Text(
+          'This source failed — found this on ${s.displayName}. Switch?',
+        ),
+        action: SnackBarAction(
+          label: 'Switch',
+          textColor: Colors.white,
+          onPressed: () {
+            actionTaken = true;
+            // Build the BookItem placeholder the detail route expects.
+            final placeholder = BookItem(
+              id: s.bookId,
+              title: state.book?.title ?? '',
+              url: s.url,
+              type: state.book?.type ?? ProviderType.manga,
+              sourceId: s.sourceId,
+            );
+            // Replace current route so back doesn't bounce into the
+            // same failing page.
+            context.replaceNamed(
+              'detail',
+              pathParameters: {
+                'sourceId': s.sourceId,
+                'bookId': s.bookId,
+              },
+              extra: placeholder,
+            );
+          },
+        ),
+      ),
+    );
+    // Fire the dismiss event when the snackbar closes (timeout, swipe,
+    // or after the action ran). Guarded against the bloc being closed.
+    // ignore: discarded_futures
+    ctrl.closed.then((_) {
+      if (!actionTaken && !bloc.isClosed) {
+        bloc.add(const DetailDismissFallback());
+      }
+    });
   }
 }
 

@@ -8,6 +8,26 @@ enum DetailStatus { initial, loading, success, error }
 
 enum SimilarStatus { idle, loading, success, error }
 
+/// Cross-source fallback descriptor. Surfaced when the primary source's
+/// detail load fails AND `AutoSwitchPrefs` is enabled AND a matching
+/// entry was discovered (or cached) on another provider.
+class DetailFallbackSuggestion extends Equatable {
+  const DetailFallbackSuggestion({
+    required this.sourceId,
+    required this.bookId,
+    required this.url,
+    required this.displayName,
+  });
+
+  final String sourceId;
+  final String bookId;
+  final String url;
+  final String displayName;
+
+  @override
+  List<Object?> get props => [sourceId, bookId, url, displayName];
+}
+
 class DetailState extends Equatable {
   final DetailStatus status;
   final BookDetail? book;
@@ -20,6 +40,10 @@ class DetailState extends Equatable {
   /// changes (e.g. via cloud sync).
   final Set<String> readChapterIds;
 
+  /// Set when the primary source failed and the bloc found / had cached a
+  /// matching entry on a different provider. Cleared by `DetailDismissFallback`.
+  final DetailFallbackSuggestion? fallbackSuggestion;
+
   const DetailState({
     this.status = DetailStatus.initial,
     this.book,
@@ -28,6 +52,7 @@ class DetailState extends Equatable {
     this.similarStatus = SimilarStatus.idle,
     this.similar = const [],
     this.readChapterIds = const {},
+    this.fallbackSuggestion,
   });
 
   bool get inLibrary => library != null;
@@ -42,6 +67,8 @@ class DetailState extends Equatable {
     SimilarStatus? similarStatus,
     List<BookItem>? similar,
     Set<String>? readChapterIds,
+    DetailFallbackSuggestion? fallbackSuggestion,
+    bool clearFallback = false,
   }) =>
       DetailState(
         status: status ?? this.status,
@@ -51,6 +78,8 @@ class DetailState extends Equatable {
         similarStatus: similarStatus ?? this.similarStatus,
         similar: similar ?? this.similar,
         readChapterIds: readChapterIds ?? this.readChapterIds,
+        fallbackSuggestion:
+            clearFallback ? null : (fallbackSuggestion ?? this.fallbackSuggestion),
       );
 
   @override
@@ -62,5 +91,6 @@ class DetailState extends Equatable {
         similarStatus,
         similar,
         readChapterIds,
+        fallbackSuggestion,
       ];
 }

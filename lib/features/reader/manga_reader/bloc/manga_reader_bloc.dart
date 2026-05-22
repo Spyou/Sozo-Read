@@ -291,10 +291,17 @@ class MangaReaderBloc extends Bloc<MangaReaderEvent, MangaReaderState> {
     if (entry != null &&
         entry.status == DownloadStatus.done &&
         entry.pages.isNotEmpty) {
+      // Two flavors of handle: internal storage hands back a filesystem
+      // path (legacy + Documents-dir backend), SAF hands back a content://
+      // URI. Both go straight through to PageImage, which checks the URL
+      // prefix and dispatches to File / DownloadsRepository.readHandle.
       final localPages = <PageContent>[
         for (var i = 0; i < entry.pages.length; i++)
           PageContent(
-            url: 'file://${entry.pages[i].localPath}',
+            url: DownloadsRepository.isFilesystemHandle(
+                    entry.pages[i].localPath)
+                ? 'file://${entry.pages[i].localPath}'
+                : entry.pages[i].localPath,
             index: i,
           ),
       ];

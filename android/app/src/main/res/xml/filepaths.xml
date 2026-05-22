@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider authority paths for the auto-updater. The Dart side
+     downloads APKs into <appCacheDir>/updates/<name>.apk, then we hand
+     a content:// URI rooted at this declaration to the system installer. -->
+<paths>
+    <cache-path name="updates" path="updates/" />
+</paths>

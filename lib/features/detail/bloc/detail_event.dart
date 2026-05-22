@@ -58,3 +58,29 @@ class DetailSimilarRequested extends DetailEvent {
 class DetailReadChaptersRefreshed extends DetailEvent {
   const DetailReadChaptersRefreshed();
 }
+
+/// User explicitly dismissed the cross-source fallback suggestion (e.g.
+/// hit Cancel on the snackbar). Clears `state.fallbackSuggestion`.
+class DetailDismissFallback extends DetailEvent {
+  const DetailDismissFallback();
+}
+
+/// Internal: a cross-source match was resolved (either from the cache
+/// or via a fanout search). Carries the four fields needed to render
+/// the snackbar suggestion. Not emitted by UI code.
+class DetailFallbackResolved extends DetailEvent {
+  const DetailFallbackResolved({
+    required this.sourceId,
+    required this.bookId,
+    required this.url,
+    required this.displayName,
+  });
+
+  final String sourceId;
+  final String bookId;
+  final String url;
+  final String displayName;
+
+  @override
+  List<Object?> get props => [sourceId, bookId, url, displayName];
+}

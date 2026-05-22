@@ -33,6 +33,19 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
   static const String _kShowFloatingAutoScroll =
       'novel.show_floating_auto_scroll';
   static const String _kVolumeButtons = 'reader.volume_buttons';
+  /// Text-to-Speech voice rate. Mirrors the `autoScrollSpeed` pattern —
+  /// a 0..1 continuous value, persisted in the shared settings box.
+  static const String _kTtsRate = 'novel.tts_rate';
+  static const String _kTtsLanguage = 'novel.tts_language';
+  static const String _kTtsVoiceName = 'novel.tts_voice_name';
+  static const String _kTtsPitch = 'novel.tts_pitch';
+  static const String _kTtsVolume = 'novel.tts_volume';
+  static const String _kTtsStopAtChapterEnd = 'novel.tts_stop_at_chapter_end';
+  static const String _kTtsSkipMarkers = 'novel.tts_skip_markers';
+  static const String _kTtsParagraphPauseMs = 'novel.tts_paragraph_pause_ms';
+  static const String _kTtsPronunciations = 'novel.tts_pronunciations';
+  static const String _kPerBookTtsVoice = 'novel.per_book_tts_voice';
+  static const String _kPerBookTtsRate = 'novel.per_book_tts_rate';
 
   static const double defaultFontSize = 16;
   static const double defaultLineHeight = 1.65;
@@ -44,6 +57,15 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
   /// (novels are slower than manga panels — see the reader).
   static const double defaultAutoScrollSpeed = 0.33;
   static const bool defaultShowFloatingAutoScroll = true;
+  /// Default TTS voice rate. The flutter_tts plugin maps 0..1 onto the
+  /// native engine's range; 0.5 sounds natural on Android + iOS.
+  static const double defaultTtsRate = 0.5;
+  static const String defaultTtsLanguage = 'en-US';
+  static const double defaultTtsPitch = 1.0;
+  static const double defaultTtsVolume = 1.0;
+  static const bool defaultTtsStopAtChapterEnd = false;
+  static const bool defaultTtsSkipMarkers = true;
+  static const int defaultTtsParagraphPauseMs = 300;
 
   /// Available font-family labels shown in the picker. System families
   /// come first (they're free — no download); the Google Fonts entries
@@ -153,7 +175,60 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
               defaultShowFloatingAutoScroll,
       useVolumeButtons:
           (_box.get(_kVolumeButtons) as bool?) ?? defaultUseVolumeButtons,
+      ttsRate: ((_box.get(_kTtsRate) as num?)?.toDouble() ?? defaultTtsRate)
+          .clamp(0.0, 1.0),
+      ttsLanguage:
+          (_box.get(_kTtsLanguage) as String?) ?? defaultTtsLanguage,
+      ttsVoiceName: _box.get(_kTtsVoiceName) as String?,
+      ttsPitch:
+          ((_box.get(_kTtsPitch) as num?)?.toDouble() ?? defaultTtsPitch)
+              .clamp(0.5, 2.0),
+      ttsVolume:
+          ((_box.get(_kTtsVolume) as num?)?.toDouble() ?? defaultTtsVolume)
+              .clamp(0.0, 1.0),
+      ttsStopAtChapterEnd:
+          (_box.get(_kTtsStopAtChapterEnd) as bool?) ??
+              defaultTtsStopAtChapterEnd,
+      ttsSkipMarkers:
+          (_box.get(_kTtsSkipMarkers) as bool?) ?? defaultTtsSkipMarkers,
+      ttsParagraphPauseMs:
+          ((_box.get(_kTtsParagraphPauseMs) as num?)?.toInt() ??
+                  defaultTtsParagraphPauseMs)
+              .clamp(0, 2000),
+      ttsPronunciations: _readTtsPronunciations(),
+      perBookTtsVoice: _readPerBookTtsVoice(),
+      perBookTtsRate: _readPerBookTtsRate(),
     );
+  }
+
+  static Map<String, String> _readTtsPronunciations() {
+    final raw = _box.get(_kTtsPronunciations);
+    if (raw is Map) {
+      return raw.map(
+        (k, v) => MapEntry(k.toString().toLowerCase(), v.toString()),
+      );
+    }
+    return const <String, String>{};
+  }
+
+  static Map<String, String> _readPerBookTtsVoice() {
+    final raw = _box.get(_kPerBookTtsVoice);
+    if (raw is Map) {
+      return raw.map((k, v) => MapEntry(k.toString(), v.toString()));
+    }
+    return const <String, String>{};
+  }
+
+  static Map<String, double> _readPerBookTtsRate() {
+    final raw = _box.get(_kPerBookTtsRate);
+    if (raw is Map) {
+      final out = <String, double>{};
+      raw.forEach((k, v) {
+        if (v is num) out[k.toString()] = v.toDouble().clamp(0.0, 1.0);
+      });
+      return out;
+    }
+    return const <String, double>{};
   }
 
   static Map<String, String> _readPerBookBg() {
@@ -288,6 +363,131 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
     _box.put(_kShowFloatingAutoScroll, v);
     emit(state.copyWith(showFloatingAutoScroll: v));
   }
+
+  void setTtsRate(double v) {
+    final clamped = v.clamp(0.0, 1.0);
+    if (clamped == state.ttsRate) return;
+    _box.put(_kTtsRate, clamped);
+    emit(state.copyWith(ttsRate: clamped));
+  }
+
+  void setTtsLanguage(String code) {
+    if (code.isEmpty) return;
+    if (code == state.ttsLanguage) return;
+    _box.put(_kTtsLanguage, code);
+    emit(state.copyWith(ttsLanguage: code));
+  }
+
+  void setTtsVoiceName(String? name) {
+    if (name == state.ttsVoiceName) return;
+    if (name == null) {
+      _box.delete(_kTtsVoiceName);
+    } else {
+      _box.put(_kTtsVoiceName, name);
+    }
+    emit(state.copyWith(ttsVoiceName: name, clearTtsVoiceName: name == null));
+  }
+
+  void setTtsPitch(double v) {
+    final clamped = v.clamp(0.5, 2.0);
+    if (clamped == state.ttsPitch) return;
+    _box.put(_kTtsPitch, clamped);
+    emit(state.copyWith(ttsPitch: clamped));
+  }
+
+  void setTtsVolume(double v) {
+    final clamped = v.clamp(0.0, 1.0);
+    if (clamped == state.ttsVolume) return;
+    _box.put(_kTtsVolume, clamped);
+    emit(state.copyWith(ttsVolume: clamped));
+  }
+
+  void setTtsStopAtChapterEnd(bool v) {
+    if (v == state.ttsStopAtChapterEnd) return;
+    _box.put(_kTtsStopAtChapterEnd, v);
+    emit(state.copyWith(ttsStopAtChapterEnd: v));
+  }
+
+  void setTtsSkipMarkers(bool v) {
+    if (v == state.ttsSkipMarkers) return;
+    _box.put(_kTtsSkipMarkers, v);
+    emit(state.copyWith(ttsSkipMarkers: v));
+  }
+
+  void setTtsParagraphPauseMs(int ms) {
+    final clamped = ms.clamp(0, 2000);
+    if (clamped == state.ttsParagraphPauseMs) return;
+    _box.put(_kTtsParagraphPauseMs, clamped);
+    emit(state.copyWith(ttsParagraphPauseMs: clamped));
+  }
+
+  void setTtsPronunciations(Map<String, String> map) {
+    // Always store keys lowercase so lookup at speak-time is a simple
+    // direct-map get rather than a per-paragraph iteration over keys.
+    final normalized = <String, String>{
+      for (final e in map.entries) e.key.toLowerCase(): e.value,
+    };
+    _box.put(_kTtsPronunciations, normalized);
+    emit(state.copyWith(ttsPronunciations: normalized));
+  }
+
+  void setTtsPronunciation(String original, String? phonetic) {
+    final key = original.toLowerCase();
+    final next = Map<String, String>.from(state.ttsPronunciations);
+    if (phonetic == null || phonetic.isEmpty) {
+      if (!next.containsKey(key)) return;
+      next.remove(key);
+    } else {
+      if (next[key] == phonetic) return;
+      next[key] = phonetic;
+    }
+    _box.put(_kTtsPronunciations, next);
+    emit(state.copyWith(ttsPronunciations: next));
+  }
+
+  /// Per-book voice override. Value is the engine's voice label or a
+  /// `lang::voiceName` composite — whichever caller stored. Null clears.
+  void setTtsVoiceForBook(String sourceId, String bookId, String? voice) {
+    final key = bookKey(sourceId, bookId);
+    final next = Map<String, String>.from(state.perBookTtsVoice);
+    if (voice == null || voice.isEmpty) {
+      if (!next.containsKey(key)) return;
+      next.remove(key);
+    } else {
+      if (next[key] == voice) return;
+      next[key] = voice;
+    }
+    _box.put(_kPerBookTtsVoice, next);
+    emit(state.copyWith(perBookTtsVoice: next));
+  }
+
+  void setTtsRateForBook(String sourceId, String bookId, double? rate) {
+    final key = bookKey(sourceId, bookId);
+    final next = Map<String, double>.from(state.perBookTtsRate);
+    if (rate == null) {
+      if (!next.containsKey(key)) return;
+      next.remove(key);
+    } else {
+      final clamped = rate.clamp(0.0, 1.0);
+      if (next[key] == clamped) return;
+      next[key] = clamped;
+    }
+    _box.put(_kPerBookTtsRate, next);
+    emit(state.copyWith(perBookTtsRate: next));
+  }
+
+  /// Effective voice for a book: per-book override or the global voice
+  /// name. Empty string means "no voice selected — let language pick".
+  String resolveTtsVoiceFor(String sourceId, String bookId) {
+    final override = state.perBookTtsVoice[bookKey(sourceId, bookId)];
+    return override ?? state.ttsVoiceName ?? '';
+  }
+
+  /// Effective rate for a book: per-book override or the global rate.
+  double resolveTtsRateFor(String sourceId, String bookId) {
+    final override = state.perBookTtsRate[bookKey(sourceId, bookId)];
+    return override ?? state.ttsRate;
+  }
 }
 
 @immutable
@@ -305,6 +505,17 @@ class NovelPrefs {
     this.autoScrollSpeed = NovelPrefsCubit.defaultAutoScrollSpeed,
     this.showFloatingAutoScroll =
         NovelPrefsCubit.defaultShowFloatingAutoScroll,
+    this.ttsRate = NovelPrefsCubit.defaultTtsRate,
+    this.ttsLanguage = NovelPrefsCubit.defaultTtsLanguage,
+    this.ttsVoiceName,
+    this.ttsPitch = NovelPrefsCubit.defaultTtsPitch,
+    this.ttsVolume = NovelPrefsCubit.defaultTtsVolume,
+    this.ttsStopAtChapterEnd = NovelPrefsCubit.defaultTtsStopAtChapterEnd,
+    this.ttsSkipMarkers = NovelPrefsCubit.defaultTtsSkipMarkers,
+    this.ttsParagraphPauseMs = NovelPrefsCubit.defaultTtsParagraphPauseMs,
+    this.ttsPronunciations = const <String, String>{},
+    this.perBookTtsVoice = const <String, String>{},
+    this.perBookTtsRate = const <String, double>{},
   });
 
   final double fontSize;
@@ -335,6 +546,41 @@ class NovelPrefs {
   /// auto-scroll is enabled.
   final bool showFloatingAutoScroll;
 
+  /// Text-to-Speech voice rate (0..1). Applied via
+  /// [NovelTtsService.setRate].
+  final double ttsRate;
+
+  /// BCP-47 language tag passed to `flutter_tts.setLanguage`.
+  final String ttsLanguage;
+
+  /// Engine-specific voice label. Null means "pick by language only".
+  final String? ttsVoiceName;
+
+  /// Pitch (0.5..2.0). 1.0 = neutral.
+  final double ttsPitch;
+
+  /// Volume (0..1).
+  final double ttsVolume;
+
+  /// When true, the reader's chapter-end callback does NOT auto-advance.
+  final bool ttsStopAtChapterEnd;
+
+  /// When true, marker glyphs / HTML-ish tags are stripped before speak.
+  final bool ttsSkipMarkers;
+
+  /// Pause between paragraphs in ms (0..2000).
+  final int ttsParagraphPauseMs;
+
+  /// Pronunciation rewrites. Keys are stored lowercase; the value is
+  /// the phonetic replacement substituted before speak.
+  final Map<String, String> ttsPronunciations;
+
+  /// Per-book voice override. Key = `sourceId::bookId`, value = label.
+  final Map<String, String> perBookTtsVoice;
+
+  /// Per-book rate override. Key = `sourceId::bookId`, value = 0..1.
+  final Map<String, double> perBookTtsRate;
+
   NovelPrefs copyWith({
     double? fontSize,
     double? lineHeight,
@@ -347,6 +593,20 @@ class NovelPrefs {
     double? autoScrollSpeed,
     bool? showFloatingAutoScroll,
     bool? useVolumeButtons,
+    double? ttsRate,
+    String? ttsLanguage,
+    String? ttsVoiceName,
+    // Sentinel for nullable voice — copyWith can't distinguish "skip"
+    // from "set to null" with a single optional positional parameter.
+    bool clearTtsVoiceName = false,
+    double? ttsPitch,
+    double? ttsVolume,
+    bool? ttsStopAtChapterEnd,
+    bool? ttsSkipMarkers,
+    int? ttsParagraphPauseMs,
+    Map<String, String>? ttsPronunciations,
+    Map<String, String>? perBookTtsVoice,
+    Map<String, double>? perBookTtsRate,
   }) =>
       NovelPrefs(
         fontSize: fontSize ?? this.fontSize,
@@ -363,6 +623,19 @@ class NovelPrefs {
         showFloatingAutoScroll:
             showFloatingAutoScroll ?? this.showFloatingAutoScroll,
         useVolumeButtons: useVolumeButtons ?? this.useVolumeButtons,
+        ttsRate: ttsRate ?? this.ttsRate,
+        ttsLanguage: ttsLanguage ?? this.ttsLanguage,
+        ttsVoiceName:
+            clearTtsVoiceName ? null : (ttsVoiceName ?? this.ttsVoiceName),
+        ttsPitch: ttsPitch ?? this.ttsPitch,
+        ttsVolume: ttsVolume ?? this.ttsVolume,
+        ttsStopAtChapterEnd: ttsStopAtChapterEnd ?? this.ttsStopAtChapterEnd,
+        ttsSkipMarkers: ttsSkipMarkers ?? this.ttsSkipMarkers,
+        ttsParagraphPauseMs:
+            ttsParagraphPauseMs ?? this.ttsParagraphPauseMs,
+        ttsPronunciations: ttsPronunciations ?? this.ttsPronunciations,
+        perBookTtsVoice: perBookTtsVoice ?? this.perBookTtsVoice,
+        perBookTtsRate: perBookTtsRate ?? this.perBookTtsRate,
       );
 
   @override
@@ -390,6 +663,28 @@ class NovelPrefs {
     }
     if (other.autoScrollSpeed != autoScrollSpeed) return false;
     if (other.showFloatingAutoScroll != showFloatingAutoScroll) return false;
+    if (other.ttsRate != ttsRate) return false;
+    if (other.ttsLanguage != ttsLanguage) return false;
+    if (other.ttsVoiceName != ttsVoiceName) return false;
+    if (other.ttsPitch != ttsPitch) return false;
+    if (other.ttsVolume != ttsVolume) return false;
+    if (other.ttsStopAtChapterEnd != ttsStopAtChapterEnd) return false;
+    if (other.ttsSkipMarkers != ttsSkipMarkers) return false;
+    if (other.ttsParagraphPauseMs != ttsParagraphPauseMs) return false;
+    if (other.ttsPronunciations.length != ttsPronunciations.length) {
+      return false;
+    }
+    for (final e in other.ttsPronunciations.entries) {
+      if (ttsPronunciations[e.key] != e.value) return false;
+    }
+    if (other.perBookTtsVoice.length != perBookTtsVoice.length) return false;
+    for (final e in other.perBookTtsVoice.entries) {
+      if (perBookTtsVoice[e.key] != e.value) return false;
+    }
+    if (other.perBookTtsRate.length != perBookTtsRate.length) return false;
+    for (final e in other.perBookTtsRate.entries) {
+      if (perBookTtsRate[e.key] != e.value) return false;
+    }
     if (other.autoScrollEnabledBooks.length !=
         autoScrollEnabledBooks.length) {
       return false;
@@ -416,6 +711,19 @@ class NovelPrefs {
         autoScrollEnabledBooks.length,
         autoScrollSpeed,
         showFloatingAutoScroll,
+        ttsRate,
+        Object.hash(
+          ttsLanguage,
+          ttsVoiceName,
+          ttsPitch,
+          ttsVolume,
+          ttsStopAtChapterEnd,
+          ttsSkipMarkers,
+          ttsParagraphPauseMs,
+          ttsPronunciations.length,
+          perBookTtsVoice.length,
+          perBookTtsRate.length,
+        ),
       );
 }
 

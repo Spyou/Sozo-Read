@@ -10,6 +10,8 @@ import 'package:path_provider/path_provider.dart';
 import '../models/book_detail.dart';
 import '../models/chapter.dart';
 import '../models/page_content.dart';
+import '../storage/download_storage.dart';
+import '../storage/download_storage_locator.dart';
 
 /// Lifecycle of a chapter download.
 ///
@@ -363,10 +365,21 @@ class DownloadsRepository {
     return v;
   }
 
-  Future<Directory> _ensureRoot() async {
+  /// Filesystem scratch directory used to stage `dio.download` output before
+  /// handing the bytes to the active [DownloadStorage]. For the internal
+  /// backend the storage layer writes to the same documents-dir tree so this
+  /// is effectively the legacy path; for the SAF backend this is a temporary
+  /// holding area whose contents get copied into the user-picked tree URI
+  /// and then deleted.
+  ///
+  /// We always go through a temp file because `dio.download` writes to a
+  /// `File` and `content://` URIs aren't `File`s — and even if we wrote a
+  /// chunk-by-chunk SAF stream, every chunk would be a method-channel hop
+  /// (slow + flaky on large pages).
+  Future<Directory> _ensureTempRoot() async {
     if (_rootDir != null) return _rootDir!;
     final docs = await getApplicationDocumentsDirectory();
-    final dir = Directory('${docs.path}/downloads');
+    final dir = Directory('${docs.path}/downloads_tmp');
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
@@ -583,13 +596,19 @@ class DownloadsRepository {
     _inFlight[key] = cancelToken;
 
     try {
-      final root = await _ensureRoot();
-      final chapterDir = Directory(
-        '${root.path}/${initial.sourceId}/${initial.bookId}/${initial.chapterId}',
+      final tmpRoot = await _ensureTempRoot();
+      final tmpChapterDir = Directory(
+        '${tmpRoot.path}/${initial.sourceId}/${initial.bookId}/${initial.chapterId}',
       );
-      if (!await chapterDir.exists()) {
-        await chapterDir.create(recursive: true);
+      if (!await tmpChapterDir.exists()) {
+        await tmpChapterDir.create(recursive: true);
       }
+
+      // Resolve the active storage *once* per chapter. Swapping storage
+      // mid-chapter (e.g. user picks an SAF dir while a download is
+      // running) is impossible because the picker UI forces all jobs to
+      // pause before changing the root — see StorageLocationCubit.
+      final DownloadStorage storage = DownloadStorageLocator.current;
 
       // Mutable working copy. We refresh from Hive on each iteration so a
       // pause/cancel that landed mid-flight is reflected immediately.
@@ -636,51 +655,55 @@ class DownloadsRepository {
 
         final p = targets[i];
 
-        // Resume support: skip if a page at this slot already exists on
-        // disk *and* in the entry's pages list. We trust `pages[i]` over
-        // a filesystem-existence check because the localPath includes
-        // the extension we picked at download time.
+        // Resume support: skip if a page at this slot already has a
+        // handle recorded *and* the storage still resolves it. We trust
+        // `pages[i]` over a re-list because the handle includes whatever
+        // extension we picked at download time.
         if (i < downloaded.length) {
           final existing = downloaded[i];
           if (existing.localPath.isNotEmpty &&
-              await File(existing.localPath).exists()) {
+              await storage.exists(existing.localPath)) {
             continue;
           }
         }
 
         final ext = _extFromUrl(p.url);
-        final filePath = '${chapterDir.path}/$i.$ext';
+        final relPath =
+            '${initial.sourceId}/${initial.bookId}/${initial.chapterId}/$i.$ext';
+        final tmpFilePath = '${tmpChapterDir.path}/$i.$ext';
 
-        // If the file is on disk from a previous half-completed run but
-        // the in-memory `downloaded` list doesn't know about it, claim
-        // it rather than re-downloading.
-        if (i >= downloaded.length && await File(filePath).exists()) {
-          downloaded.add(DownloadedPage(
-            url: p.url,
-            localPath: filePath,
-            headers: p.headers,
-          ));
-          current = current.copyWith(
-            completed: downloaded.length,
-            pages: List.unmodifiable(downloaded),
-          );
-          await _save(current);
-          continue;
-        }
-
+        // Stream the page to a scratch file via dio. SAF write APIs are
+        // method-channel calls per-chunk and are too slow + flaky to use
+        // mid-stream — temp-then-move is the robust pattern.
         await dio.download(
           p.url,
-          filePath,
+          tmpFilePath,
           options: Options(
             headers: p.headers,
             responseType: ResponseType.bytes,
+            // Generous receive timeout because some manga CDNs trickle the
+            // last few KB; SAF migrations and slow networks should not be
+            // confused with a dead connection.
+            receiveTimeout: const Duration(seconds: 60),
           ),
           cancelToken: cancelToken,
         );
 
+        // Hand the bytes to the active storage. For the internal backend
+        // this writes alongside the legacy `downloads/` tree and returns
+        // a filesystem path; for SAF it copies into the user-picked tree
+        // URI and returns a `content://...` document URI.
+        final bytes =
+            Uint8List.fromList(await File(tmpFilePath).readAsBytes());
+        final handle = await storage.writeBytes(relPath, bytes);
+        // Drop the scratch copy — the storage backend now owns the bytes.
+        try {
+          await File(tmpFilePath).delete();
+        } catch (_) {/* best-effort */}
+
         final page = DownloadedPage(
           url: p.url,
-          localPath: filePath,
+          localPath: handle,
           headers: p.headers,
         );
         if (i < downloaded.length) {
@@ -882,15 +905,21 @@ class DownloadsRepository {
 
   Future<void> delete(String sourceId, String bookId, String chapterId) async {
     final key = _keyFor(sourceId, bookId, chapterId);
+    // Wipe both the active storage *and* the scratch temp dir, since a
+    // mid-download crash may have left orphaned bytes in the temp tree.
     try {
-      final root = await _ensureRoot();
-      final dir = Directory('${root.path}/$sourceId/$bookId/$chapterId');
+      await DownloadStorageLocator.current
+          .deleteRecursive('$sourceId/$bookId/$chapterId');
+    } catch (_) {/* best-effort */}
+    try {
+      final tmpRoot = await _ensureTempRoot();
+      final dir = Directory(
+        '${tmpRoot.path}/$sourceId/$bookId/$chapterId',
+      );
       if (await dir.exists()) {
         await dir.delete(recursive: true);
       }
-    } catch (_) {
-      // Best-effort.
-    }
+    } catch (_) {/* best-effort */}
     await _box.delete(key);
     // Emit so any listeners can react (stream will simply not emit a new
     // entry; safest to close).
@@ -914,6 +943,25 @@ class DownloadsRepository {
         error: '__deleted__',
       ));
     }
+  }
+
+  /// True if [handle] is a plain filesystem path. Internal-storage handles
+  /// are absolute POSIX paths (start with `/`); SAF handles are
+  /// `content://...` URIs. Reader call sites use this to decide between
+  /// `Image.file` / `File.readAsBytes` and a SAF byte read.
+  static bool isFilesystemHandle(String handle) {
+    if (handle.isEmpty) return false;
+    return handle.startsWith('/');
+  }
+
+  /// Resolve a downloaded-page handle into bytes regardless of the backend
+  /// that produced it. Cheap fast-path for filesystem handles
+  /// (`File.readAsBytes`); SAF handles incur one method-channel hop.
+  static Future<Uint8List> readHandle(String handle) async {
+    if (isFilesystemHandle(handle)) {
+      return Uint8List.fromList(await File(handle).readAsBytes());
+    }
+    return DownloadStorageLocator.current.readBytes(handle);
   }
 
   Future<void> dispose() async {

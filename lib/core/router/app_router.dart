@@ -27,6 +27,8 @@ import '../../features/settings/screens/security_settings_screen.dart';
 import '../../features/settings/screens/settings_screen.dart';
 import '../../features/settings/screens/storage_settings_screen.dart';
 import '../../features/settings/screens/trackers_settings_screen.dart';
+import '../../features/settings/screens/tts_pronunciations_screen.dart';
+import '../../features/settings/screens/updates_settings_screen.dart';
 import '../di/injection.dart';
 import '../trackers/anilist/anilist_tracker.dart';
 import '../trackers/mal/mal_tracker.dart';
@@ -267,6 +269,16 @@ GoRouter buildRouter() {
         path: '/settings/security',
         name: 'settings-security',
         builder: (_, _) => const SecuritySettingsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/updates',
+        name: 'settings-updates',
+        builder: (_, _) => const UpdatesSettingsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/tts/pronunciations',
+        name: 'settings-tts-pronunciations',
+        builder: (_, _) => const TtsPronunciationsScreen(),
       ),
       GoRoute(
         path: '/detail/:sourceId/:bookId',

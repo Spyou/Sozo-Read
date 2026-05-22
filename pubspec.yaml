@@ -124,6 +124,26 @@ dependencies:
   # PIN remains the fallback and the source of truth for the lock state.
   local_auth: ^2.3.0
 
+  # Android SAF (Storage Access Framework) tree picker + persistable URI
+  # permission. Used by the storage-location picker so users can route
+  # downloaded chapters onto an SD card / external folder without
+  # requesting the Play-Store-restricted MANAGE_EXTERNAL_STORAGE
+  # permission. iOS gets a no-op fallback (Documents directory only).
+  # `saf_util` provides the picker + tree ops (list/mkdirp/exists/copy/
+  # delete); `saf_stream` is the companion package from the same author
+  # used purely for byte I/O against content:// URIs because saf_util
+  # 0.7.0 only exposes raw file descriptors, which are awkward to
+  # read/write from pure Dart.
+  saf_util: ^0.7.0
+  saf_stream: ^0.10.0
+
+  # Text-to-Speech for the novel reader. flutter_tts wraps each
+  # platform's native TTS engine; audio_service exposes our handler to
+  # the OS media-controls notification so users can play/pause from
+  # the lock screen.
+  flutter_tts: ^4.2.0
+  audio_service: ^0.18.15
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

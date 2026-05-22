@@ -14,6 +14,7 @@ import '../repository/book_detail_cache.dart';
 import '../repository/categories_repository.dart';
 import '../repository/chapter_bookmarks_repository.dart';
 import '../repository/chapter_thumbnails_repository.dart';
+import '../repository/cross_source_match_cache.dart';
 import '../repository/downloads_repository.dart';
 import '../repository/library_categories_repository.dart';
 import '../repository/library_repository.dart';
@@ -24,9 +25,13 @@ import '../repository/provider_settings_repository.dart';
 import '../repository/read_chapters_repository.dart';
 import '../repository/tracker_repository.dart';
 import '../repository/dictionary_repository.dart';
+import '../services/apk_installer.dart';
 import '../services/changelog_service.dart';
 import '../services/chapter_check_service.dart';
+import '../services/cross_source_matcher.dart';
 import '../services/download_notification_service.dart';
+import '../services/novel_tts_service.dart';
+import '../services/update_service.dart';
 import '../trackers/anilist/anilist_api.dart';
 import '../trackers/anilist/anilist_auth.dart';
 import '../trackers/anilist/anilist_tracker.dart';
@@ -38,6 +43,7 @@ import '../services/cloudinary_service.dart';
 import '../services/notification_service.dart';
 import '../state/active_source_cubit.dart';
 import '../state/auth_service.dart';
+import '../state/auto_switch_prefs.dart';
 import '../state/chapter_sort_cubit.dart';
 import '../state/incognito_cubit.dart';
 import '../state/source_filter_cubit.dart';
@@ -112,6 +118,15 @@ Future<void> configureDependencies({AppLockCubit? appLock}) async {
     () => NotificationsRepository(),
   );
   sl.registerLazySingleton<BookDetailCache>(() => BookDetailCache());
+  // Cross-source fallback: persistent Hive cache + matcher service +
+  // user-facing opt-in flag. Backing boxes are opened in AppBootstrap.
+  sl.registerLazySingleton<CrossSourceMatchCache>(
+    () => CrossSourceMatchCache(),
+  );
+  sl.registerLazySingleton<CrossSourceMatcher>(
+    () => CrossSourceMatcher(repository: sl()),
+  );
+  sl.registerLazySingleton<AutoSwitchPrefs>(() => AutoSwitchPrefs());
   sl.registerLazySingleton<ActiveSourceCubit>(
     () => ActiveSourceCubit(repository: sl()),
   );
@@ -141,6 +156,10 @@ Future<void> configureDependencies({AppLockCubit? appLock}) async {
     () => NotificationsPrefsCubit(),
   );
   sl.registerLazySingleton<NotificationService>(() => NotificationService());
+  // Novel-reader Text-to-Speech. Held as a singleton so the same
+  // handler instance is what AudioService.init() registered with the
+  // OS media-controls notification.
+  sl.registerLazySingleton<NovelTtsService>(() => NovelTtsService());
   // Persistent download-progress notification. Subscribes to the
   // downloads Hive box on `start()` (called from AppBootstrap) and
   // renders one throttled, replace-in-place notification summarising
@@ -149,6 +168,17 @@ Future<void> configureDependencies({AppLockCubit? appLock}) async {
   // What's new sheet (post version-bump) and /settings/changelog.
   sl.registerLazySingleton<ChangelogService>(
     () => ChangelogService(dio: sl(), boxName: 'settings'),
+  );
+  // Auto-updater: shares the changelog's release cache. The installer is a
+  // thin MethodChannel wrapper around the platform-side FileProvider flow.
+  sl.registerLazySingleton<ApkInstaller>(() => const ApkInstaller());
+  sl.registerLazySingleton<UpdateService>(
+    () => UpdateService(
+      changelog: sl(),
+      dio: sl(),
+      installer: sl(),
+      boxName: 'settings',
+    ),
   );
   // Word definitions for the novel reader's long-press lookup. The
   // backing Hive cache is opened in app_bootstrap.dart.
