@@ -406,17 +406,14 @@ class _NovelViewState extends State<_NovelView>
                                   color: fg,
                                 ),
                               ),
-                              // Inject a "Look up" item into the
-                              // long-press context menu so the user can
-                              // pull up a dictionary entry on any
-                              // selected word without leaving the
-                              // reader. Falls through to the default
-                              // copy/share menu when nothing is
-                              // selected.
+                              // Inject a "Look up" item as the FIRST
+                              // entry in the long-press context menu so
+                              // it doesn't get pushed into Android's
+                              // 3-dot overflow on narrow screens.
+                              // Falls through to the default copy /
+                              // share menu when nothing is selected.
                               contextMenuBuilder: (ctx, editableState) {
                                 final entries = <ContextMenuButtonItem>[];
-                                entries.addAll(
-                                    editableState.contextMenuButtonItems);
                                 final selected = editableState
                                     .textEditingValue.selection
                                     .textInside(state.text)
@@ -432,6 +429,8 @@ class _NovelViewState extends State<_NovelView>
                                     },
                                   ));
                                 }
+                                entries.addAll(
+                                    editableState.contextMenuButtonItems);
                                 return AdaptiveTextSelectionToolbar
                                     .buttonItems(
                                   anchors:
