@@ -21,6 +21,7 @@ import '../widgets/dictionary_popup.dart';
 import '../widgets/draggable_auto_scroll_fab.dart';
 import '../widgets/font_picker_sheet.dart';
 import '../widgets/tts_control_sheet.dart';
+import '../widgets/tts_mini_player.dart';
 import '../bloc/novel_reader_bloc.dart';
 import '../bloc/novel_reader_event.dart';
 import '../bloc/novel_reader_state.dart';
@@ -74,6 +75,17 @@ class _NovelViewState extends State<_NovelView>
   bool _ttsAutoAdvancePending = false;
   int? _lastReaderChapterIndex;
 
+  // Tracks the text snapshot we last handed to TTS, so the chapter-nav
+  // listener can tell a stale "copyWith only updated chapterIndex"
+  // emission apart from the eventual "loaded the new body" emission.
+  // Without this, the listener fires on the first emission (old text,
+  // new chapterIndex) and TTS reads the previous chapter.
+  String? _ttsLoadedText;
+  // Reason a TTS reload is pending. `null` = no pending reload.
+  // `manual` = user tapped Prev/Next; preserve play/pause. `autoAdvance`
+  // = TTS finished a chapter on its own; always resume playback.
+  _TtsReloadReason? _pendingTtsReload;
+
   // Paragraph highlight state. The reader splits the chapter body into
   // paragraph widgets and keeps one GlobalKey per paragraph so the TTS
   // index subscription can scroll-into-view + tint the active one.
@@ -82,6 +94,26 @@ class _NovelViewState extends State<_NovelView>
   List<String> _paragraphs = const [];
   List<GlobalKey> _paragraphKeys = const [];
   String? _splitForText;
+
+  // Listens to MediaItem emissions so the UI rebuilds (showing or
+  // hiding the FAB / pill) whenever a chapter is loaded into TTS or
+  // the queue is cleared via `dismiss()`.
+  StreamSubscription<MediaItem?>? _ttsMediaItemSub;
+  // Shown when the active TTS paragraph is no longer in the scroll
+  // viewport (user scrolled ahead / back while TTS plays). Tapping it
+  // scrolls the active paragraph back into view.
+  bool _showBackToParagraphPill = false;
+
+  // Swipe-up-to-next-chapter accumulator. ScrollPhysics on Android
+  // doesn't let the viewport scroll past the bottom, but it still
+  // reports OverscrollNotification with the attempted pixel delta. We
+  // sum those deltas; once they pass [_kOverscrollNextThreshold] the
+  // bloc is told to advance to the next chapter. Reset on each
+  // ScrollEndNotification so the user can do it again with a fresh
+  // gesture rather than building infinite carry-over from prior pulls.
+  double _overscrollAccumulated = 0.0;
+  bool _overscrollNextFired = false;
+  static const double _kOverscrollNextThreshold = 120.0;
 
   @override
   void initState() {
@@ -104,20 +136,62 @@ class _NovelViewState extends State<_NovelView>
         _scrollToParagraph(i);
       });
     });
+    // Rebuild on TTS load/unload so the mini-player and FAB toggle
+    // their visibility. Distinct-ish: we only flip state when the
+    // loaded/unloaded boolean actually changes, not on every emission.
+    _ttsMediaItemSub =
+        sl<NovelTtsService>().mediaItem.listen((_) {
+      if (!mounted) return;
+      setState(() {});
+    });
+    // Watch scroll for the "Back to TTS Location" pill. We listen to
+    // every scroll event but only call setState when the visibility
+    // bool actually flips — viable for 60Hz drags without jank.
+    _scroll.addListener(_updateBackToParagraphPill);
     _readerStateSub = readerBloc.stream.listen((s) {
       if (!mounted) return;
-      // TTS auto-advance: previous chapter finished speaking, we asked
-      // the bloc to load the next one, and now the body text is ready —
-      // hand it back to the TTS service and resume playback. Compare
-      // against `_lastReaderChapterIndex` so we only fire once per
-      // chapter swap, not every progress / resume emission.
-      if (_ttsAutoAdvancePending &&
+      // Chapter-nav -> TTS reload coordination.
+      //
+      // The bloc emits THREE times per chapter change:
+      //   1. copyWith(chapterIndex: i)         — chapterIndex new, text OLD
+      //   2. status=loading, text=''            — clearing old text
+      //   3. status=success, text=<new body>    — new chapter ready
+      //
+      // We can't reload TTS on (1) because s.text still points at the
+      // PREVIOUS chapter. So when chapterIndex flips we just remember
+      // *why* a reload is needed; the actual reload runs on the first
+      // (status==success && text != _ttsLoadedText) emission afterwards.
+      if (s.book != null &&
+          _lastReaderChapterIndex != null &&
+          s.chapterIndex != _lastReaderChapterIndex &&
+          _pendingTtsReload == null) {
+        if (_ttsAutoAdvancePending) {
+          _ttsAutoAdvancePending = false;
+          _pendingTtsReload = _TtsReloadReason.autoAdvance;
+        } else {
+          // Only queue a reload when TTS is already loaded — no point
+          // pre-loading a chapter the user hasn't asked to hear.
+          final tts = sl<NovelTtsService>();
+          if (tts.mediaItem.valueOrNull != null) {
+            _pendingTtsReload = _TtsReloadReason.manual;
+          }
+        }
+      }
+      // Drain the pending reload once the new body text is actually
+      // here. We also guard on `text != _ttsLoadedText` so we never
+      // re-push the same text we already handed TTS.
+      if (_pendingTtsReload != null &&
           s.status == NovelReaderStatus.success &&
-          s.book != null &&
-          s.chapterIndex != _lastReaderChapterIndex) {
-        _ttsAutoAdvancePending = false;
-        _lastReaderChapterIndex = s.chapterIndex;
-        _loadTtsForCurrentChapter(s, autoPlay: true);
+          s.text.isNotEmpty &&
+          s.text != _ttsLoadedText) {
+        final reason = _pendingTtsReload!;
+        _pendingTtsReload = null;
+        if (reason == _TtsReloadReason.autoAdvance) {
+          _loadTtsForCurrentChapter(s, autoPlay: true);
+        } else {
+          final wasPlaying = sl<NovelTtsService>().isPlaying;
+          _loadTtsForCurrentChapter(s, autoPlay: wasPlaying);
+        }
       }
       _lastReaderChapterIndex = s.chapterIndex;
       final key = s.book == null
@@ -142,6 +216,7 @@ class _NovelViewState extends State<_NovelView>
     final chapter = book.chapters[s.chapterIndex];
     final tts = sl<NovelTtsService>();
     final prefsCubit = context.read<NovelPrefsCubit>();
+    _ttsLoadedText = s.text;
     // Reapply the persisted rate every load — the previous chapter may
     // have used a different rate if the user dragged the slider mid-
     // playback (only an issue across cold restarts in practice).
@@ -225,6 +300,25 @@ class _NovelViewState extends State<_NovelView>
     );
   }
 
+  /// User-driven "swipe up past the end of the chapter" → next chapter.
+  /// Different from `_onTtsChapterEnd`: that path also flips the TTS
+  /// auto-advance flag so the next chapter starts speaking. Here the
+  /// user is reading, not listening; we just hand the bloc the new
+  /// chapter index and let it fetch + render.
+  void _goToNextChapter() {
+    final bloc = context.read<NovelReaderBloc>();
+    final s = bloc.state;
+    final book = s.book;
+    if (book == null) return;
+    final ascending = book.chapters.length >= 2 &&
+        ((book.chapters.last.number ?? 0) >
+            (book.chapters.first.number ?? 0));
+    final delta = ascending ? 1 : -1;
+    final next = s.chapterIndex + delta;
+    if (next < 0 || next >= book.chapters.length) return;
+    bloc.add(NovelReaderChapterChanged(next));
+  }
+
   /// Fired by the TTS service after the last paragraph of the current
   /// chapter completes. Mirrors the ascending heuristic used by
   /// `_evaluateAutoScroll` so the next-chapter index lines up with the
@@ -245,17 +339,17 @@ class _NovelViewState extends State<_NovelView>
     bloc.add(NovelReaderChapterChanged(next));
   }
 
-  /// Tap handler for the "Read aloud" row in the reader settings sheet.
+  /// Tap handler for the "Read aloud" row in the reader settings sheet
+  /// AND the floating TTS button.
   ///
   /// Three cases:
-  ///   1. TTS is already loaded with THIS book+chapter → just open the
-  ///      sheet. Whatever state TTS is in (paused mid-paragraph, ready
-  ///      at the start, etc.) is preserved; the play button resumes
-  ///      from there.
+  ///   1. TTS is already loaded with THIS book+chapter → just expand
+  ///      the mini-player. Whatever state TTS is in (paused mid-
+  ///      paragraph, ready at the start, etc.) is preserved.
   ///   2. TTS is idle OR loaded with a different chapter → call
   ///      loadChapter with the resume hint (first visible paragraph in
-  ///      the viewport). Open sheet — user taps Play to start.
-  /// We do NOT auto-play; the sheet's Play button is the user's
+  ///      the viewport), then expand the mini-player.
+  /// We do NOT auto-play; the bar's Play button is the user's
   /// affordance.
   Future<void> _onTtsTap(BuildContext context) async {
     final s = context.read<NovelReaderBloc>().state;
@@ -272,7 +366,60 @@ class _NovelViewState extends State<_NovelView>
       final start = _firstVisibleParagraphIndex();
       _loadTtsForCurrentChapter(s, autoPlay: false, startParagraph: start);
     }
-    await TtsControlSheet.show(context);
+    // No setState needed — the `_ttsMediaItemSub` listener triggered by
+    // loadChapter will rebuild the Stack on the next tick, swapping the
+    // FAB out for the pill.
+  }
+
+  /// Builds the TTS surface — either the bottom mini-player OR the
+  /// floating circular button. The two are mutually exclusive: never
+  /// both on screen at once. Returns an empty list when there's no
+  /// book/chapter to read aloud (e.g. while the chapter body is still
+  /// loading from the network).
+  List<Widget> _buildTtsSurface(BuildContext context) {
+    final s = context.read<NovelReaderBloc>().state;
+    final book = s.book;
+    if (book == null || book.chapters.isEmpty || s.text.isEmpty) {
+      return const [];
+    }
+    final tts = sl<NovelTtsService>();
+    final loaded = tts.mediaItem.valueOrNull != null;
+    // TTS loaded → Samsung-style pill at the bottom-center. The pill's
+    // own close (×) clears the MediaItem, which re-routes this method
+    // through the not-loaded branch and brings the FAB back.
+    if (loaded) {
+      return [
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: Center(
+            child: TtsMiniPlayer(
+              onTapPill: () => TtsControlSheet.show(context),
+              onDismiss: () {
+                // ignore: discarded_futures
+                tts.dismiss();
+              },
+            ),
+          ),
+        ),
+      ];
+    }
+    final showFab =
+        context.read<NovelPrefsCubit>().state.showFloatingTts;
+    if (!showFab) return const [];
+    return [
+      Positioned(
+        right: 16,
+        bottom: 20,
+        child: TtsFloatingButton(
+          onTap: () {
+            // ignore: discarded_futures
+            _onTtsTap(context);
+          },
+        ),
+      ),
+    ];
   }
 
   @override
@@ -280,9 +427,45 @@ class _NovelViewState extends State<_NovelView>
     _prefsSub?.cancel();
     _readerStateSub?.cancel();
     _ttsParagraphSub?.cancel();
+    _ttsMediaItemSub?.cancel();
     _autoScrollTicker?.dispose();
+    _scroll.removeListener(_updateBackToParagraphPill);
     _scroll.dispose();
     super.dispose();
+  }
+
+  /// Recomputes pill visibility on each scroll event. The active
+  /// paragraph is considered "visible" when ANY part of its render box
+  /// vertically overlaps the scroll viewport — flexible enough to
+  /// handle partially-visible paragraphs at the viewport edges.
+  void _updateBackToParagraphPill() {
+    if (!mounted) return;
+    final desired = _shouldShowBackToParagraphPill();
+    if (desired == _showBackToParagraphPill) return;
+    setState(() => _showBackToParagraphPill = desired);
+  }
+
+  bool _shouldShowBackToParagraphPill() {
+    // No pill when TTS isn't loaded or no active paragraph is tracked.
+    if (sl<NovelTtsService>().mediaItem.valueOrNull == null) return false;
+    final i = _ttsParagraphIndex;
+    if (i < 0 || i >= _paragraphKeys.length) return false;
+    final ctx = _paragraphKeys[i].currentContext;
+    if (ctx == null) return false;
+    final paraBox = ctx.findRenderObject();
+    if (paraBox is! RenderBox) return false;
+    if (!_scroll.hasClients) return false;
+    final viewportObj = _scroll.position.context.notificationContext
+        ?.findRenderObject();
+    if (viewportObj is! RenderBox) return false;
+    final paraTop = paraBox.localToGlobal(Offset.zero).dy;
+    final paraBottom = paraTop + paraBox.size.height;
+    final vTop = viewportObj.localToGlobal(Offset.zero).dy;
+    final vBottom = vTop + viewportObj.size.height;
+    // Visible = any vertical overlap. Inverse = paragraph fully above
+    // OR fully below the viewport.
+    final visible = paraBottom > vTop && paraTop < vBottom;
+    return !visible;
   }
 
   /// Map 0..1 slider value to a px/sec rate. Novels move slower than
@@ -509,6 +692,65 @@ class _NovelViewState extends State<_NovelView>
                 onTap: () => _openAutoScrollSheet(context),
               ),
             ),
+          // TTS surface — bar OR FAB, mutually exclusive. The bar is
+          // pinned to the bottom; the FAB sits bottom-right and either
+          // starts TTS (when no MediaItem) or re-expands the bar (when
+          // loaded and collapsed).
+          ..._buildTtsSurface(context),
+          // "Back to TTS Location" pill — appears at the top when the
+          // active paragraph is scrolled out of view. Tap = scroll the
+          // paragraph back into the upper third of the viewport.
+          if (_showBackToParagraphPill)
+            Positioned(
+              top: 8,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Material(
+                  elevation: 4,
+                  color: AppColors.surface,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                    side: BorderSide(
+                      color: AppColors.primary.withValues(alpha: 0.4),
+                    ),
+                  ),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(20),
+                    onTap: () {
+                      if (_ttsParagraphIndex >= 0) {
+                        _scrollToParagraph(_ttsParagraphIndex);
+                      }
+                    },
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.headphones_rounded,
+                            size: 16,
+                            color: AppColors.primary,
+                          ),
+                          SizedBox(width: 6),
+                          Text(
+                            'Back to TTS Location',
+                            style: TextStyle(
+                              color: AppColors.textPrimary,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -563,13 +805,40 @@ class _NovelViewState extends State<_NovelView>
           return Column(
             children: [
               Expanded(
-                child: NotificationListener<ScrollUpdateNotification>(
+                child: NotificationListener<ScrollNotification>(
                   onNotification: (n) {
-                    if (n.metrics.maxScrollExtent > 0) {
-                      final p = n.metrics.pixels / n.metrics.maxScrollExtent;
+                    // Scroll-progress mirror for the reader-state bloc
+                    // (also drives the floating progress bar in the
+                    // mini-player).
+                    if (n is ScrollUpdateNotification &&
+                        n.metrics.maxScrollExtent > 0) {
+                      final p =
+                          n.metrics.pixels / n.metrics.maxScrollExtent;
                       context
                           .read<NovelReaderBloc>()
-                          .add(NovelReaderProgressUpdated(p.clamp(0.0, 1.0)));
+                          .add(NovelReaderProgressUpdated(
+                              p.clamp(0.0, 1.0)));
+                    }
+                    // Swipe-up-past-end gesture: detect overscroll at
+                    // the bottom edge and advance the chapter once the
+                    // user has pulled `_kOverscrollNextThreshold` pixels
+                    // beyond the content. Only counts positive
+                    // overscroll (past the end of the chapter), not
+                    // top-edge overscroll.
+                    if (n is OverscrollNotification &&
+                        n.overscroll > 0 &&
+                        !_overscrollNextFired) {
+                      _overscrollAccumulated += n.overscroll;
+                      if (_overscrollAccumulated >=
+                          _kOverscrollNextThreshold) {
+                        _overscrollNextFired = true;
+                        _overscrollAccumulated = 0;
+                        _goToNextChapter();
+                      }
+                    }
+                    if (n is ScrollEndNotification) {
+                      _overscrollAccumulated = 0;
+                      _overscrollNextFired = false;
                     }
                     return false;
                   },
@@ -586,13 +855,23 @@ class _NovelViewState extends State<_NovelView>
                           color: fg,
                         ),
                       );
+                      // Add bottom padding so the chapter's last paragraph
+                      // can scroll above the floating TTS cluster (pill +
+                      // progress bar + title) instead of being hidden
+                      // behind it. The cluster is ~80 px tall after the
+                      // safe-area tightening; 100 leaves a small breathing
+                      // gap. FAB-only state keeps the default 32 px.
+                      final pillVisible =
+                          sl<NovelTtsService>().mediaItem.valueOrNull !=
+                              null;
+                      final bottomPad = pillVisible ? 100.0 : 32.0;
                       return SingleChildScrollView(
                         controller: _scroll,
                         padding: EdgeInsets.fromLTRB(
                           prefs.horizontalMargin,
                           8,
                           prefs.horizontalMargin,
-                          32,
+                          bottomPad,
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -733,12 +1012,24 @@ class _NovelNavBar extends StatelessWidget {
               icon: const Icon(Icons.chevron_left),
               label: const Text('Prev'),
             ),
+            // Hide the chapter-scroll progress bar when TTS is active.
+            // The floating mini-player already shows a TTS paragraph
+            // progress bar, and two stacked bars at the bottom of the
+            // screen looked redundant + confusing. Falls back to the
+            // chapter-scroll bar as soon as TTS is dismissed.
             Expanded(
-              child: LinearProgressIndicator(
-                value: state.progress,
-                color: theme.colorScheme.primary,
-                backgroundColor: theme.cardTheme.color ?? AppColors.card,
-                minHeight: 4,
+              child: StreamBuilder<MediaItem?>(
+                stream: sl<NovelTtsService>().mediaItem,
+                builder: (_, snap) {
+                  if (snap.data != null) return const SizedBox.shrink();
+                  return LinearProgressIndicator(
+                    value: state.progress,
+                    color: theme.colorScheme.primary,
+                    backgroundColor:
+                        theme.cardTheme.color ?? AppColors.card,
+                    minHeight: 4,
+                  );
+                },
               ),
             ),
             TextButton.icon(
@@ -1133,14 +1424,51 @@ class _NovelSettingsSheet extends StatelessWidget {
                         );
                       },
                     ),
+                  // Toggle the bottom-right FAB. When off, the user has
+                  // to enter TTS via this Read aloud row instead — the
+                  // mini-player pill still appears once TTS is loaded.
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    secondary: const Icon(
+                      Icons.headphones_outlined,
+                      color: AppColors.textSecondary,
+                    ),
+                    title: const Text(
+                      'Show floating Read aloud button',
+                      style: TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    subtitle: const Text(
+                      'Bottom-right shortcut to start TTS',
+                      style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 12,
+                      ),
+                    ),
+                    value: prefs.showFloatingTts,
+                    activeTrackColor: AppColors.primary,
+                    onChanged: (v) => cubit.setShowFloatingTts(v),
+                  ),
                   // Voice & language picker. Subtitle shows the
                   // resolved voice or "Default" when no override is set.
+                  // Neural engine: per-book overrides aren't supported, so
+                  // tapping the row jumps straight to the global voice
+                  // manager (download / pick / preview live there).
                   if (_hasBook)
                     Builder(builder: (rowCtx) {
+                      final isNeural =
+                          cubit.state.ttsEngine == TtsEngine.neural;
                       final voice = cubit
                           .resolveTtsVoiceFor(sourceId!, bookId!)
                           .trim();
-                      final subtitle = voice.isEmpty ? 'Default' : voice;
+                      final subtitle = voice.isNotEmpty
+                          ? voice
+                          : (isNeural
+                              ? 'No voice downloaded yet'
+                              : 'Default');
                       return ListTile(
                         contentPadding: EdgeInsets.zero,
                         leading: const Icon(
@@ -1166,13 +1494,55 @@ class _NovelSettingsSheet extends StatelessWidget {
                           Icons.chevron_right_rounded,
                           color: AppColors.textTertiary,
                         ),
-                        onTap: () => _NovelVoicePickerSheet.show(
-                          rowCtx,
-                          sourceId: sourceId!,
-                          bookId: bookId!,
-                        ),
+                        onTap: () {
+                          if (isNeural) {
+                            // Close the settings sheet so the manager
+                            // takes the foreground cleanly.
+                            Navigator.of(rowCtx).pop();
+                            rowCtx.push('/settings/tts/voices');
+                            return;
+                          }
+                          _NovelVoicePickerSheet.show(
+                            rowCtx,
+                            sourceId: sourceId!,
+                            bookId: bookId!,
+                          );
+                        },
                       );
                     }),
+                  // Bridge to the full TTS section in global settings —
+                  // pitch / volume / paragraph pause / pronunciations /
+                  // stop-at-chapter-end / skip-markup live there.
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(
+                      Icons.tune_rounded,
+                      color: AppColors.textSecondary,
+                    ),
+                    title: const Text(
+                      'More TTS settings',
+                      style: TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    subtitle: const Text(
+                      'Pitch, volume, pronunciations, pauses',
+                      style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 12,
+                      ),
+                    ),
+                    trailing: const Icon(
+                      Icons.chevron_right_rounded,
+                      color: AppColors.textTertiary,
+                    ),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      context.push('/settings/reading');
+                    },
+                  ),
                 ],
               );
             },
@@ -1377,3 +1747,7 @@ class _NovelVoicePickerSheetState extends State<_NovelVoicePickerSheet> {
     );
   }
 }
+
+/// Why a TTS reload is queued — drives the autoPlay decision when the
+/// new chapter's body text finally arrives.
+enum _TtsReloadReason { manual, autoAdvance }

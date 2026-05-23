@@ -3,7 +3,9 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/di/injection.dart';
+import '../../../core/repository/voices_repository.dart';
 import '../../../core/services/novel_tts_service.dart';
+import '../../../core/services/voice_catalog.dart';
 import '../../../core/state/manga_prefs_cubit.dart';
 import '../../../core/state/notifications_prefs_cubit.dart';
 import '../../../core/state/novel_prefs_cubit.dart';
@@ -307,14 +309,32 @@ class _TtsSettingsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final cubit = context.read<NovelPrefsCubit>();
     final entryCount = prefs.ttsPronunciations.length;
+    final isNeural = prefs.ttsEngine == TtsEngine.neural;
+    final installedNeuralCount =
+        isNeural ? sl<VoicesRepository>().installedIds().length : 0;
     return SettingsCard(
       children: [
         SettingsTile(
+          icon: Icons.tune_rounded,
+          title: 'TTS engine',
+          subtitle: isNeural
+              ? 'Neural (premium, on-device)'
+              : 'System (built-in, free)',
+          onTap: () => _openEnginePicker(context, prefs.ttsEngine),
+        ),
+        SettingsTile(
           icon: Icons.graphic_eq_rounded,
           title: 'Voice',
-          subtitle: prefs.ttsVoiceName ?? 'Default for language',
+          subtitle: _voiceSubtitle(prefs, isNeural),
           onTap: () => VoicePickerSheet.show(context),
         ),
+        if (isNeural)
+          SettingsTile(
+            icon: Icons.library_music_outlined,
+            title: 'Manage voices',
+            subtitle: '$installedNeuralCount downloaded',
+            onTap: () => context.push('/settings/tts/voices'),
+          ),
         _SliderTile(
           icon: Icons.height_rounded,
           title: 'Pitch',
@@ -386,6 +406,79 @@ class _TtsSettingsCard extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Subtitle for the Voice tile. Branches on engine so a user who
+/// switched to Neural sees the Piper voice (not a stale system-engine
+/// name carried over from the other branch).
+String _voiceSubtitle(NovelPrefs prefs, bool isNeural) {
+  if (!isNeural) {
+    return prefs.ttsVoiceName ?? 'Default for language';
+  }
+  final id = prefs.ttsNeuralVoiceId;
+  if (id == null || id.isEmpty) return 'No voice downloaded yet';
+  return VoiceCatalog.byId(id)?.displayName ?? id;
+}
+
+/// Bottom sheet that lets the user flip between the system and neural
+/// TTS engines. Selecting `neural` when no voice is installed routes
+/// the user straight to the voice manager so they can download one
+/// immediately — otherwise they'd hit silent speech and have to hunt
+/// for the right screen themselves.
+Future<void> _openEnginePicker(
+  BuildContext context,
+  TtsEngine current,
+) async {
+  final cubit = context.read<NovelPrefsCubit>();
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (ctx) {
+      return SettingsSheetShell(
+        title: 'TTS engine',
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.record_voice_over_outlined),
+              title: const Text('System'),
+              subtitle: const Text(
+                'Built-in OS voices. Free, always available.',
+              ),
+              trailing: current == TtsEngine.system
+                  ? Icon(Icons.check, color: Theme.of(ctx).colorScheme.primary)
+                  : null,
+              onTap: () {
+                cubit.setTtsEngine(TtsEngine.system);
+                Navigator.pop(ctx);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.auto_awesome_outlined),
+              title: const Text('Neural'),
+              subtitle: const Text(
+                'Premium, fully on-device. Requires a downloaded voice.',
+              ),
+              trailing: current == TtsEngine.neural
+                  ? Icon(Icons.check, color: Theme.of(ctx).colorScheme.primary)
+                  : null,
+              onTap: () {
+                cubit.setTtsEngine(TtsEngine.neural);
+                Navigator.pop(ctx);
+                // No installed neural voice yet — drop the user on
+                // the manager so they can pick + download one in one
+                // continuous gesture.
+                final installed = sl<VoicesRepository>().installedIds();
+                if (installed.isEmpty) {
+                  context.push('/settings/tts/voices');
+                }
+              },
+            ),
+          ],
+        ),
+      );
+    },
+  );
 }
 
 /// Inline slider row that fits the [SettingsCard] visual style. We keep

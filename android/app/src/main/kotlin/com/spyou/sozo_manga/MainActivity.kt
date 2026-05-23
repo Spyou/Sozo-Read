@@ -6,16 +6,22 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.view.WindowManager
 import androidx.core.content.FileProvider
-import io.flutter.embedding.android.FlutterFragmentActivity
+import com.ryanheise.audioservice.AudioServiceFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
-// FlutterFragmentActivity (NOT FlutterActivity) is required by `local_auth`
-// for the biometric prompt — the prompt is hosted in a BiometricFragment
-// which only attaches to a FragmentActivity. Using FlutterActivity here
-// crashes when the user taps the biometric button.
-class MainActivity : FlutterFragmentActivity() {
+// AudioServiceFragmentActivity (extends FlutterFragmentActivity) is required
+// because:
+//   1. local_auth needs FragmentActivity for the biometric prompt
+//      (BiometricFragment only attaches to FragmentActivity).
+//   2. audio_service needs the activity to share its FlutterEngine with
+//      the AudioService — without this the plugin throws
+//      "The Activity class declared in your AndroidManifest.xml is wrong"
+//      and OS media-controls + TTS playback stop working.
+// AudioServiceFragmentActivity extends FlutterFragmentActivity, so both
+// requirements are satisfied by this one parent.
+class MainActivity : AudioServiceFragmentActivity() {
     private val appIconChannel = "sozo_manga/app_icon"
     private val secureWindowChannel = "sozo/secure_window"
     private val apkInstallerChannel = "sozo/apk_installer"

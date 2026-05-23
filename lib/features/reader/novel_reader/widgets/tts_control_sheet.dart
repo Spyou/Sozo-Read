@@ -218,6 +218,44 @@ class _TtsControlSheetState extends State<TtsControlSheet> {
               _ProgressRow(tts: tts),
               const SizedBox(height: 14),
               const Text(
+                'Speed',
+                style: TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              BlocBuilder<NovelPrefsCubit, NovelPrefs>(
+                buildWhen: (a, b) => a.ttsRate != b.ttsRate,
+                builder: (_, p) {
+                  final cubit = context.read<NovelPrefsCubit>();
+                  // 0.3–0.8 mirrors the global Reading-settings rate
+                  // slider — flutter_tts drops phonemes below 0.3 and
+                  // sounds chipmunked above 0.8.
+                  return Slider(
+                    value: p.ttsRate.clamp(0.3, 0.8),
+                    min: 0.3,
+                    max: 0.8,
+                    divisions: 10,
+                    label: p.ttsRate.toStringAsFixed(2),
+                    // During the drag we only persist + update the engine
+                    // for the NEXT paragraph — restarting the current
+                    // utterance on every tick would stutter badly. The
+                    // mid-paragraph restart happens once on onChangeEnd.
+                    onChanged: (v) {
+                      cubit.setTtsRate(v);
+                      // ignore: discarded_futures
+                      tts.setRate(v);
+                    },
+                    onChangeEnd: (v) {
+                      // ignore: discarded_futures
+                      tts.setRate(v, restartIfPlaying: true);
+                    },
+                  );
+                },
+              ),
+              const SizedBox(height: 6),
+              const Text(
                 'Sleep timer',
                 style: TextStyle(
                   color: AppColors.textSecondary,

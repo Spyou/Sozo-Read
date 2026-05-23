@@ -3,8 +3,19 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:hive/hive.dart';
 
+import '../services/voice_catalog.dart';
+
 /// Reading background mode applied to the manga (vertical) and novel readers.
 enum ReadingBgMode { system, white, sepia, black }
+
+/// Text-to-Speech engine backing the novel reader.
+///
+/// * `system` — flutter_tts wrapping the OS-native TTS engine. Always
+///   available, no downloads, OEM-quality voices.
+/// * `neural` — sherpa-onnx running a user-downloaded Piper-format voice
+///   on-device. Higher quality, fully offline, but the user must
+///   download a voice pack (50-200 MB) before it can speak.
+enum TtsEngine { system, neural }
 
 /// Global novel-reader typography preferences. Persisted in the shared
 /// Hive `settings` box.
@@ -32,6 +43,7 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
   static const String _kAutoScrollSpeed = 'novel.auto_scroll_speed';
   static const String _kShowFloatingAutoScroll =
       'novel.show_floating_auto_scroll';
+  static const String _kShowFloatingTts = 'novel.show_floating_tts';
   static const String _kVolumeButtons = 'reader.volume_buttons';
   /// Text-to-Speech voice rate. Mirrors the `autoScrollSpeed` pattern —
   /// a 0..1 continuous value, persisted in the shared settings box.
@@ -46,6 +58,14 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
   static const String _kTtsPronunciations = 'novel.tts_pronunciations';
   static const String _kPerBookTtsVoice = 'novel.per_book_tts_voice';
   static const String _kPerBookTtsRate = 'novel.per_book_tts_rate';
+  /// Neural-engine selection. Values are [TtsEngine.name]; absent
+  /// falls back to [defaultTtsEngine].
+  static const String _kTtsEngine = 'novel.tts_engine';
+  /// Currently selected neural voice id. Resolved by the voices
+  /// repository (Agent B) to a downloaded model on disk. Null means
+  /// "no voice picked yet" — the service falls back to the system
+  /// engine until the user downloads one.
+  static const String _kTtsNeuralVoiceId = 'novel.tts_neural_voice_id';
 
   static const double defaultFontSize = 16;
   static const double defaultLineHeight = 1.65;
@@ -57,6 +77,7 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
   /// (novels are slower than manga panels — see the reader).
   static const double defaultAutoScrollSpeed = 0.33;
   static const bool defaultShowFloatingAutoScroll = true;
+  static const bool defaultShowFloatingTts = true;
   /// Default TTS voice rate. The flutter_tts plugin maps 0..1 onto the
   /// native engine's range; 0.5 sounds natural on Android + iOS.
   static const double defaultTtsRate = 0.5;
@@ -66,6 +87,10 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
   static const bool defaultTtsStopAtChapterEnd = false;
   static const bool defaultTtsSkipMarkers = true;
   static const int defaultTtsParagraphPauseMs = 300;
+  /// Default TTS engine. Stays `system` so existing users see no
+  /// behaviour change — the neural engine is strictly opt-in via the
+  /// settings UI + voice download.
+  static const TtsEngine defaultTtsEngine = TtsEngine.system;
 
   /// Available font-family labels shown in the picker. System families
   /// come first (they're free — no download); the Google Fonts entries
@@ -173,6 +198,8 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
       showFloatingAutoScroll:
           (_box.get(_kShowFloatingAutoScroll) as bool?) ??
               defaultShowFloatingAutoScroll,
+      showFloatingTts:
+          (_box.get(_kShowFloatingTts) as bool?) ?? defaultShowFloatingTts,
       useVolumeButtons:
           (_box.get(_kVolumeButtons) as bool?) ?? defaultUseVolumeButtons,
       ttsRate: ((_box.get(_kTtsRate) as num?)?.toDouble() ?? defaultTtsRate)
@@ -198,6 +225,16 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
       ttsPronunciations: _readTtsPronunciations(),
       perBookTtsVoice: _readPerBookTtsVoice(),
       perBookTtsRate: _readPerBookTtsRate(),
+      ttsEngine: _readTtsEngine(_box.get(_kTtsEngine) as String?),
+      ttsNeuralVoiceId: _box.get(_kTtsNeuralVoiceId) as String?,
+    );
+  }
+
+  static TtsEngine _readTtsEngine(String? raw) {
+    if (raw == null) return defaultTtsEngine;
+    return TtsEngine.values.firstWhere(
+      (e) => e.name == raw,
+      orElse: () => defaultTtsEngine,
     );
   }
 
@@ -364,6 +401,12 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
     emit(state.copyWith(showFloatingAutoScroll: v));
   }
 
+  void setShowFloatingTts(bool v) {
+    if (v == state.showFloatingTts) return;
+    _box.put(_kShowFloatingTts, v);
+    emit(state.copyWith(showFloatingTts: v));
+  }
+
   void setTtsRate(double v) {
     final clamped = v.clamp(0.0, 1.0);
     if (clamped == state.ttsRate) return;
@@ -476,9 +519,18 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
     emit(state.copyWith(perBookTtsRate: next));
   }
 
-  /// Effective voice for a book: per-book override or the global voice
-  /// name. Empty string means "no voice selected — let language pick".
+  /// Effective voice label for a book — UI display only.
+  ///
+  /// System engine: per-book override > global system voice name.
+  /// Neural engine: catalog displayName for the active neural voice id
+  /// (per-book overrides aren't supported on neural yet).
+  /// Empty string means "no voice selected — let language pick".
   String resolveTtsVoiceFor(String sourceId, String bookId) {
+    if (state.ttsEngine == TtsEngine.neural) {
+      final id = state.ttsNeuralVoiceId;
+      if (id == null || id.isEmpty) return '';
+      return VoiceCatalog.byId(id)?.displayName ?? id;
+    }
     final override = state.perBookTtsVoice[bookKey(sourceId, bookId)];
     return override ?? state.ttsVoiceName ?? '';
   }
@@ -487,6 +539,30 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
   double resolveTtsRateFor(String sourceId, String bookId) {
     final override = state.perBookTtsRate[bookKey(sourceId, bookId)];
     return override ?? state.ttsRate;
+  }
+
+  /// Flip between the system (flutter_tts) and neural (sherpa-onnx)
+  /// engines. The TTS service reads this on the next `loadChapter`.
+  void setTtsEngine(TtsEngine engine) {
+    if (engine == state.ttsEngine) return;
+    _box.put(_kTtsEngine, engine.name);
+    emit(state.copyWith(ttsEngine: engine));
+  }
+
+  /// Set or clear the active neural voice id. Pass `null` to drop the
+  /// selection — the service will fall back to system speech until a
+  /// new voice is picked.
+  void setTtsNeuralVoiceId(String? voiceId) {
+    if (voiceId == state.ttsNeuralVoiceId) return;
+    if (voiceId == null || voiceId.isEmpty) {
+      _box.delete(_kTtsNeuralVoiceId);
+    } else {
+      _box.put(_kTtsNeuralVoiceId, voiceId);
+    }
+    emit(state.copyWith(
+      ttsNeuralVoiceId: voiceId,
+      clearTtsNeuralVoiceId: voiceId == null || voiceId.isEmpty,
+    ));
   }
 }
 
@@ -505,6 +581,7 @@ class NovelPrefs {
     this.autoScrollSpeed = NovelPrefsCubit.defaultAutoScrollSpeed,
     this.showFloatingAutoScroll =
         NovelPrefsCubit.defaultShowFloatingAutoScroll,
+    this.showFloatingTts = NovelPrefsCubit.defaultShowFloatingTts,
     this.ttsRate = NovelPrefsCubit.defaultTtsRate,
     this.ttsLanguage = NovelPrefsCubit.defaultTtsLanguage,
     this.ttsVoiceName,
@@ -516,6 +593,8 @@ class NovelPrefs {
     this.ttsPronunciations = const <String, String>{},
     this.perBookTtsVoice = const <String, String>{},
     this.perBookTtsRate = const <String, double>{},
+    this.ttsEngine = NovelPrefsCubit.defaultTtsEngine,
+    this.ttsNeuralVoiceId,
   });
 
   final double fontSize;
@@ -545,6 +624,10 @@ class NovelPrefs {
   /// Whether the draggable floating control shows in the reader when
   /// auto-scroll is enabled.
   final bool showFloatingAutoScroll;
+
+  /// Whether the bottom-right "Read aloud" FAB shows when TTS is not
+  /// loaded. Independent of the active mini-player pill.
+  final bool showFloatingTts;
 
   /// Text-to-Speech voice rate (0..1). Applied via
   /// [NovelTtsService.setRate].
@@ -581,6 +664,14 @@ class NovelPrefs {
   /// Per-book rate override. Key = `sourceId::bookId`, value = 0..1.
   final Map<String, double> perBookTtsRate;
 
+  /// Active TTS engine. See [TtsEngine].
+  final TtsEngine ttsEngine;
+
+  /// Active neural voice id (resolved by `VoicesRepository` to a model
+  /// path). Null means "no voice picked" — the neural engine cannot
+  /// speak until the user downloads one.
+  final String? ttsNeuralVoiceId;
+
   NovelPrefs copyWith({
     double? fontSize,
     double? lineHeight,
@@ -592,6 +683,7 @@ class NovelPrefs {
     Set<String>? autoScrollEnabledBooks,
     double? autoScrollSpeed,
     bool? showFloatingAutoScroll,
+    bool? showFloatingTts,
     bool? useVolumeButtons,
     double? ttsRate,
     String? ttsLanguage,
@@ -607,6 +699,11 @@ class NovelPrefs {
     Map<String, String>? ttsPronunciations,
     Map<String, String>? perBookTtsVoice,
     Map<String, double>? perBookTtsRate,
+    TtsEngine? ttsEngine,
+    String? ttsNeuralVoiceId,
+    // Mirrors `clearTtsVoiceName` — distinguishes "leave unchanged"
+    // from "clear to null" for the nullable voice id.
+    bool clearTtsNeuralVoiceId = false,
   }) =>
       NovelPrefs(
         fontSize: fontSize ?? this.fontSize,
@@ -622,6 +719,7 @@ class NovelPrefs {
         autoScrollSpeed: autoScrollSpeed ?? this.autoScrollSpeed,
         showFloatingAutoScroll:
             showFloatingAutoScroll ?? this.showFloatingAutoScroll,
+        showFloatingTts: showFloatingTts ?? this.showFloatingTts,
         useVolumeButtons: useVolumeButtons ?? this.useVolumeButtons,
         ttsRate: ttsRate ?? this.ttsRate,
         ttsLanguage: ttsLanguage ?? this.ttsLanguage,
@@ -636,6 +734,10 @@ class NovelPrefs {
         ttsPronunciations: ttsPronunciations ?? this.ttsPronunciations,
         perBookTtsVoice: perBookTtsVoice ?? this.perBookTtsVoice,
         perBookTtsRate: perBookTtsRate ?? this.perBookTtsRate,
+        ttsEngine: ttsEngine ?? this.ttsEngine,
+        ttsNeuralVoiceId: clearTtsNeuralVoiceId
+            ? null
+            : (ttsNeuralVoiceId ?? this.ttsNeuralVoiceId),
       );
 
   @override
@@ -663,6 +765,7 @@ class NovelPrefs {
     }
     if (other.autoScrollSpeed != autoScrollSpeed) return false;
     if (other.showFloatingAutoScroll != showFloatingAutoScroll) return false;
+    if (other.showFloatingTts != showFloatingTts) return false;
     if (other.ttsRate != ttsRate) return false;
     if (other.ttsLanguage != ttsLanguage) return false;
     if (other.ttsVoiceName != ttsVoiceName) return false;
@@ -685,6 +788,8 @@ class NovelPrefs {
     for (final e in other.perBookTtsRate.entries) {
       if (perBookTtsRate[e.key] != e.value) return false;
     }
+    if (other.ttsEngine != ttsEngine) return false;
+    if (other.ttsNeuralVoiceId != ttsNeuralVoiceId) return false;
     if (other.autoScrollEnabledBooks.length !=
         autoScrollEnabledBooks.length) {
       return false;
@@ -711,6 +816,7 @@ class NovelPrefs {
         autoScrollEnabledBooks.length,
         autoScrollSpeed,
         showFloatingAutoScroll,
+        showFloatingTts,
         ttsRate,
         Object.hash(
           ttsLanguage,
@@ -723,6 +829,8 @@ class NovelPrefs {
           ttsPronunciations.length,
           perBookTtsVoice.length,
           perBookTtsRate.length,
+          ttsEngine,
+          ttsNeuralVoiceId,
         ),
       );
 }

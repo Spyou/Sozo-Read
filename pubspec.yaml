@@ -144,6 +144,24 @@ dependencies:
   flutter_tts: ^4.2.0
   audio_service: ^0.18.15
 
+  # Optional neural / on-device TTS engine. sherpa-onnx wraps the k2-fsa
+  # C++ runtime and ships per-ABI native libs via plugin-default
+  # packages (`sherpa_onnx_android_arm64`, `_armeabi`, `_x86`, `_x86_64`,
+  # plus `_ios`, `_macos`, `_linux`, `_windows`). The user picks the
+  # engine in settings and downloads a Piper-format voice into app-
+  # documents; `_SherpaTtsEngine` loads it at runtime.
+  sherpa_onnx: ^1.13.2
+  # PCM playback for the neural engine. We render each paragraph to a
+  # temp WAV and let `audioplayers` stream it — lighter than just_audio
+  # (no platform interface fan-out + no media-controls plugin needed
+  # since `audio_service` already owns the notification).
+  audioplayers: ^6.6.0
+
+  # Neural-voice archive extraction. The sherpa-onnx Piper voice
+  # releases ship as `.tar.bz2`, so we use the `archive` package to
+  # decode bz2 then untar in pure Dart (no native deps).
+  archive: ^4.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

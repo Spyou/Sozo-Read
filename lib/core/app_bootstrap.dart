@@ -28,6 +28,7 @@ import 'repository/provider_settings_repository.dart';
 import 'repository/read_chapters_repository.dart';
 import 'provider/provider_manager.dart';
 import 'repository/tracker_repository.dart';
+import 'repository/voices_repository.dart';
 import 'security/app_lock_cubit.dart';
 import 'services/changelog_service.dart';
 import 'package:audio_service/audio_service.dart';
@@ -82,6 +83,7 @@ class AppBootstrap {
     await CrossSourceMatchCache.init();
     await ProviderSettingsRepository.init();
     await TrackerRepository.init();
+    await VoicesRepository.init();
     await ActiveSourceCubit.init();
     // Build the App Lock cubit BEFORE configureDependencies so it can be
     // injected into the DI graph at registration time. The constructor
@@ -195,6 +197,11 @@ class AppBootstrap {
       final prefsCubit = sl<NovelPrefsCubit>();
       final prefs = prefsCubit.state;
       final tts = sl<NovelTtsService>();
+      // Belt-and-braces wire-up — the DI graph already passes the
+      // cubit at construction, but if the service was built before
+      // the cubit (cold-start ordering), this ensures it has a live
+      // reference before the user's first chapter load.
+      tts.attachPrefs(prefsCubit);
       // ignore: discarded_futures
       tts.setLanguage(prefs.ttsLanguage);
       // ignore: discarded_futures
@@ -205,6 +212,14 @@ class AppBootstrap {
       tts.setParagraphPauseMs(prefs.ttsParagraphPauseMs);
       tts.setStopAtChapterEnd(prefs.ttsStopAtChapterEnd);
       tts.setPronunciations(prefs.ttsPronunciations);
+      // If the user has the neural engine active AND has already
+      // downloaded a voice, warm the sherpa-onnx engine + load the
+      // ONNX model now so the first paragraph doesn't pay the
+      // cold-start latency (~500ms). Failures (missing native libs
+      // on a test runner, voice files moved) fall back silently to
+      // the system engine — `_ensureEngineForPref` handles that path.
+      // ignore: discarded_futures
+      tts.warmupNeural();
     } catch (e) {
       debugPrint('[bootstrap] TTS pref seeding failed: $e');
     }

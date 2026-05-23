@@ -22,6 +22,7 @@ import '../../features/settings/screens/about_settings_screen.dart';
 import '../../features/settings/screens/appearance_settings_screen.dart';
 import '../../features/settings/screens/changelog_screen.dart';
 import '../../features/settings/screens/developers_settings_screen.dart';
+import '../../features/settings/screens/neural_voices_screen.dart';
 import '../../features/settings/screens/reading_settings_screen.dart';
 import '../../features/settings/screens/security_settings_screen.dart';
 import '../../features/settings/screens/settings_screen.dart';
@@ -279,6 +280,11 @@ GoRouter buildRouter() {
         path: '/settings/tts/pronunciations',
         name: 'settings-tts-pronunciations',
         builder: (_, _) => const TtsPronunciationsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/tts/voices',
+        name: 'settings-tts-voices',
+        builder: (_, _) => const NeuralVoicesScreen(),
       ),
       GoRoute(
         path: '/detail/:sourceId/:bookId',

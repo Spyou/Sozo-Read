@@ -25,6 +25,7 @@ import '../repository/provider_settings_repository.dart';
 import '../repository/read_chapters_repository.dart';
 import '../repository/tracker_repository.dart';
 import '../repository/dictionary_repository.dart';
+import '../repository/voices_repository.dart';
 import '../services/apk_installer.dart';
 import '../services/changelog_service.dart';
 import '../services/chapter_check_service.dart';
@@ -32,6 +33,7 @@ import '../services/cross_source_matcher.dart';
 import '../services/download_notification_service.dart';
 import '../services/novel_tts_service.dart';
 import '../services/update_service.dart';
+import '../services/voice_downloader.dart';
 import '../trackers/anilist/anilist_api.dart';
 import '../trackers/anilist/anilist_auth.dart';
 import '../trackers/anilist/anilist_tracker.dart';
@@ -158,8 +160,21 @@ Future<void> configureDependencies({AppLockCubit? appLock}) async {
   sl.registerLazySingleton<NotificationService>(() => NotificationService());
   // Novel-reader Text-to-Speech. Held as a singleton so the same
   // handler instance is what AudioService.init() registered with the
-  // OS media-controls notification.
-  sl.registerLazySingleton<NovelTtsService>(() => NovelTtsService());
+  // OS media-controls notification. The prefs cubit is injected so
+  // the service can pick the engine (system vs neural) when a new
+  // chapter loads; AppBootstrap also calls `attachPrefs` as a
+  // belt-and-braces wire-up after the cubit is eagerly built.
+  sl.registerLazySingleton<NovelTtsService>(
+    () => NovelTtsService(prefs: sl<NovelPrefsCubit>()),
+  );
+  // Neural-voice catalog repo + downloader. Hive box is opened in
+  // AppBootstrap.initialize alongside the other repos. The downloader
+  // fetches Piper bundles from the sherpa-onnx GitHub release and
+  // hands the resolved paths to the repo for `pathFor` lookups.
+  sl.registerLazySingleton<VoicesRepository>(() => VoicesRepository());
+  sl.registerLazySingleton<VoiceDownloader>(
+    () => VoiceDownloader(dio: sl(), repo: sl()),
+  );
   // Persistent download-progress notification. Subscribes to the
   // downloads Hive box on `start()` (called from AppBootstrap) and
   // renders one throttled, replace-in-place notification summarising

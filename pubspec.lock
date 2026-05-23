@@ -58,7 +58,7 @@ packages:
     source: hosted
     version: "1.0.4"
   archive:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: archive
       sha256: a96e8b390886ee8abb49b7bd3ac8df6f451c621619f52a26e815fdcf568959ff
@@ -113,6 +113,62 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.2.3"
+  audioplayers:
+    dependency: "direct main"
+    description:
+      name: audioplayers
+      sha256: a72dd459d1a48f61a6fb9c0134dba26597c9236af40639ff0eb70eb4e0baab70
+      url: "https://pub.dev"
+    source: hosted
+    version: "6.6.0"
+  audioplayers_android:
+    dependency: transitive
+    description:
+      name: audioplayers_android
+      sha256: "60a6728277228413a85755bd3ffd6fab98f6555608923813ce383b190a360605"
+      url: "https://pub.dev"
+    source: hosted
+    version: "5.2.1"
+  audioplayers_darwin:
+    dependency: transitive
+    description:
+      name: audioplayers_darwin
+      sha256: c994b3bb3a921e4904ac40e013fbc94488e824fd7c1de6326f549943b0b44a91
+      url: "https://pub.dev"
+    source: hosted
+    version: "6.4.0"
+  audioplayers_linux:
+    dependency: transitive
+    description:
+      name: audioplayers_linux
+      sha256: f75bce1ce864170ef5e6a2c6a61cd3339e1a17ce11e99a25bae4474ea491d001
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.2.1"
+  audioplayers_platform_interface:
+    dependency: transitive
+    description:
+      name: audioplayers_platform_interface
+      sha256: "0e2f6a919ab56d0fec272e801abc07b26ae7f31980f912f24af4748763e5a656"
+      url: "https://pub.dev"
+    source: hosted
+    version: "7.1.1"
+  audioplayers_web:
+    dependency: transitive
+    description:
+      name: audioplayers_web
+      sha256: faa8fa6587f996a6f604433b53af44c57a1407d4fe8dff5766cf63d6875e8de9
+      url: "https://pub.dev"
+    source: hosted
+    version: "5.2.0"
+  audioplayers_windows:
+    dependency: transitive
+    description:
+      name: audioplayers_windows
+      sha256: bafff2b38b6f6d331887558ba6e0a01c9c208d9dbb3ad0005234db065122a734
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.3.0"
   bloc:
     dependency: transitive
     description:
@@ -1376,6 +1432,78 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.0"
+  sherpa_onnx:
+    dependency: "direct main"
+    description:
+      name: sherpa_onnx
+      sha256: b5a503cedc0605134770015fd4dba00c62f109f8a16630a52ebc04ef99ccbf93
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.13.2"
+  sherpa_onnx_android_arm64:
+    dependency: transitive
+    description:
+      name: sherpa_onnx_android_arm64
+      sha256: b6aeb7cd5b32c6d1bd209a4bff0f28044d95977620d20e1d926b0c31e0a0725f
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.13.2"
+  sherpa_onnx_android_armeabi:
+    dependency: transitive
+    description:
+      name: sherpa_onnx_android_armeabi
+      sha256: ab647a0a4ca4b7c31159db1bdfc79b718882a088a2ed9757b340856d626715c0
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.13.2"
+  sherpa_onnx_android_x86:
+    dependency: transitive
+    description:
+      name: sherpa_onnx_android_x86
+      sha256: df0e8bf68ff564bf8683f285ee3e65fb296ec118dbf6ce60a906bb1b3206120e
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.13.2"
+  sherpa_onnx_android_x86_64:
+    dependency: transitive
+    description:
+      name: sherpa_onnx_android_x86_64
+      sha256: f9f63fafde9498bed9de45a0e1d3f2eb4d649ad257e5de30b91d139432750b84
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.13.2"
+  sherpa_onnx_ios:
+    dependency: transitive
+    description:
+      name: sherpa_onnx_ios
+      sha256: "46b30fe5db3e0741026e94f09f3515dc60071eb970e12039265e1ba98c4d812d"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.13.2"
+  sherpa_onnx_linux:
+    dependency: transitive
+    description:
+      name: sherpa_onnx_linux
+      sha256: e0b2780d809a5be6cc36b7915bbe25dd15059e357a7f0ac684feb4e6ad4e20b7
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.13.2"
+  sherpa_onnx_macos:
+    dependency: transitive
+    description:
+      name: sherpa_onnx_macos
+      sha256: "8049aae4e290d01ce51267541a770eb5a61c8164d46c1127406557995b054875"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.13.2"
+  sherpa_onnx_windows:
+    dependency: transitive
+    description:
+      name: sherpa_onnx_windows
+      sha256: "428c5fc2fea2d9083555d6281224ab7dba3a33a8fbc013de18ea843cf1236f14"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.13.2"
   shimmer:
     dependency: "direct main"
     description:
