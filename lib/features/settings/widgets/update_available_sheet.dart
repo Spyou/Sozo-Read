@@ -50,7 +50,10 @@ class _UpdateAvailableSheetState extends State<UpdateAvailableSheet> {
   }
 
   Future<void> _startUpdate() async {
-    final asset = widget.release.apkAsset;
+    // Resolve via the ABI-aware picker so the filename + path match
+    // whichever asset will actually be downloaded (matters for the
+    // FileProvider install step, which uses the resolved path).
+    final asset = await _service.resolveApkAsset(widget.release);
     if (asset == null) {
       setState(() => _error = 'No APK attached to this release.');
       return;

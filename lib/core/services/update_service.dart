@@ -80,7 +80,48 @@ class UpdateService {
     return true;
   }
 
-  /// Streams progress 0..1 while downloading the release's first APK asset
+  /// Picks the best APK asset for this device.
+  ///
+  /// Strategy:
+  ///   1. Prefer an asset whose name contains the device's primary ABI
+  ///      (e.g. `arm64-v8a` on a modern phone → `SozoRead-v1.3-arm64.apk`).
+  ///   2. Else prefer an asset whose name contains `universal` (the
+  ///      fat fallback build).
+  ///   3. Else fall back to the release's first `.apk` ([release.apkAsset]).
+  ///
+  /// Filename matching is case-insensitive. The ABI string from
+  /// [ApkInstaller.primaryAbi] is matched against the asset name with a
+  /// stripped form too (`arm64-v8a` also matches assets named just
+  /// `arm64`), so we don't strictly require the full ABI tag in the
+  /// release's filename — common short labels work.
+  Future<GitHubReleaseAsset?> resolveApkAsset(GitHubRelease release) async {
+    final apks = release.assets
+        .where((a) => a.name.toLowerCase().endsWith('.apk'))
+        .toList();
+    if (apks.isEmpty) return null;
+    if (apks.length == 1) return apks.first;
+    final abi = (await _installer.primaryAbi())?.toLowerCase();
+    if (abi != null && abi.isNotEmpty) {
+      // `arm64-v8a` → also accept `arm64`. `armeabi-v7a` → `armv7` /
+      // `armeabi`. `x86_64` keeps itself.
+      final aliases = <String>{abi};
+      if (abi == 'arm64-v8a') aliases.add('arm64');
+      if (abi == 'armeabi-v7a') {
+        aliases.add('armv7');
+        aliases.add('armeabi');
+      }
+      for (final a in apks) {
+        final n = a.name.toLowerCase();
+        if (aliases.any(n.contains)) return a;
+      }
+    }
+    for (final a in apks) {
+      if (a.name.toLowerCase().contains('universal')) return a;
+    }
+    return apks.first;
+  }
+
+  /// Streams progress 0..1 while downloading the best-matching APK asset
   /// to [targetPath]. Throws if the release has no APK.
   Stream<double> downloadApk(
     GitHubRelease release, {
@@ -88,17 +129,21 @@ class UpdateService {
     CancelToken? cancelToken,
   }) {
     final controller = StreamController<double>();
-    final asset = release.apkAsset;
-    if (asset == null || asset.browserDownloadUrl.isEmpty) {
-      controller.addError(StateError('No APK asset on ${release.tagName}'));
-      // ignore: discarded_futures
-      controller.close();
-      return controller.stream;
-    }
     // Run the download off the stream subscription so the caller gets
-    // progress events as soon as Dio reports them.
+    // progress events as soon as Dio reports them. Asset selection is
+    // async (it hops to the platform channel for the device's ABI) so
+    // the resolver call lives inside this future.
     () async {
       try {
+        final asset = await resolveApkAsset(release);
+        if (asset == null || asset.browserDownloadUrl.isEmpty) {
+          if (!controller.isClosed) {
+            controller
+                .addError(StateError('No APK asset on ${release.tagName}'));
+            await controller.close();
+          }
+          return;
+        }
         await _dio.download(
           asset.browserDownloadUrl,
           targetPath,

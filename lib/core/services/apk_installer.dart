@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 /// Thin wrapper around the platform-side APK installer.
@@ -19,5 +20,18 @@ class ApkInstaller {
   /// in the system prompt; this just opens that prompt.
   Future<void> installApk(String path) async {
     await _channel.invokeMethod<void>('installApk', {'path': path});
+  }
+
+  /// Returns the device's preferred native ABI (`arm64-v8a`,
+  /// `armeabi-v7a`, `x86_64`, etc.). Used by the auto-updater to pick
+  /// the right APK asset when a release ships multiple per-ABI files.
+  /// Returns null on iOS / desktop where the concept doesn't apply.
+  Future<String?> primaryAbi() async {
+    try {
+      return await _channel.invokeMethod<String>('primaryAbi');
+    } catch (e) {
+      debugPrint('[updater] primaryAbi failed: $e');
+      return null;
+    }
   }
 }

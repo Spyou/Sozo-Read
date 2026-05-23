@@ -3,6 +3,7 @@ package com.spyou.sozo_manga
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.view.WindowManager
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterFragmentActivity
@@ -99,6 +100,19 @@ class MainActivity : FlutterFragmentActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, apkInstallerChannel)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "primaryAbi" -> {
+                        // Returns the device's preferred 64/32-bit native
+                        // ABI (e.g., `arm64-v8a`, `armeabi-v7a`, `x86_64`).
+                        // SUPPORTED_ABIS is ordered by preference — index 0
+                        // is what the OS will actually pick for native
+                        // libraries.
+                        try {
+                            val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: ""
+                            result.success(abi)
+                        } catch (e: Exception) {
+                            result.error("ABI_FAILED", e.message, null)
+                        }
+                    }
                     "installApk" -> {
                         val path = call.argument<String>("path")
                         if (path.isNullOrEmpty()) {
