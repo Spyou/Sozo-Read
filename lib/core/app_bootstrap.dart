@@ -28,6 +28,7 @@ import 'repository/provider_settings_repository.dart';
 import 'repository/read_chapters_repository.dart';
 import 'provider/provider_manager.dart';
 import 'repository/tracker_repository.dart';
+import 'repository/summaries_repository.dart';
 import 'repository/voices_repository.dart';
 import 'security/app_lock_cubit.dart';
 import 'services/changelog_service.dart';
@@ -41,6 +42,7 @@ import 'trackers/anilist/anilist_tracker.dart';
 import 'trackers/mal/mal_tracker.dart';
 import 'state/active_source_cubit.dart';
 import 'state/manga_prefs_cubit.dart';
+import 'state/ai_prefs_cubit.dart';
 import 'state/novel_prefs_cubit.dart';
 import 'state/theme_cubit.dart';
 import 'sync/library_sync_service.dart';
@@ -84,6 +86,11 @@ class AppBootstrap {
     await ProviderSettingsRepository.init();
     await TrackerRepository.init();
     await VoicesRepository.init();
+    // AI summary cache + register the repo as a singleton. Done here
+    // (not in configureDependencies) because the Hive box has to be
+    // opened asynchronously before the repo can be constructed.
+    final summariesRepo = await SummariesRepository.init();
+    sl.registerSingleton<SummariesRepository>(summariesRepo);
     await ActiveSourceCubit.init();
     // Build the App Lock cubit BEFORE configureDependencies so it can be
     // injected into the DI graph at registration time. The constructor
@@ -105,6 +112,11 @@ class AppBootstrap {
     sl<ThemeCubit>();
     sl<NovelPrefsCubit>();
     sl<MangaPrefsCubit>();
+    // Eager-load AI prefs so the toggle / model selection / key
+    // presence is ready before the reader screens build their AI
+    // entry points.
+    // ignore: discarded_futures
+    sl<AiPrefsCubit>().load();
     // Rewrites legacy bare-sourceId keys in `provider_registry` to the
     // composite `(repoUrl, sourceId)` keys introduced by the multi-repo
     // refactor. Idempotent — already-composite keys are skipped. Must

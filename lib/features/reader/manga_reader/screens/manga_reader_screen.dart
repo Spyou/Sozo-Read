@@ -17,13 +17,17 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../../../core/di/injection.dart';
 import '../../../../core/models/book_detail.dart';
 import '../../../../core/models/chapter.dart';
+import '../../../../core/models/page_content.dart';
 import '../../../../core/repository/downloads_repository.dart';
 import '../../../../core/repository/library_repository.dart';
 import '../../../../core/repository/provider_repository.dart';
+import '../../../../core/services/ai/ai_client.dart';
+import '../../../../core/state/ai_prefs_cubit.dart';
 import '../../../../core/state/manga_prefs_cubit.dart';
 import '../../../../core/state/novel_prefs_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/state_views.dart';
+import '../../widgets/ai_summary_sheet.dart';
 import '../../../settings/widgets/settings_dialogs.dart'
     show
         openMangaColorFilterSheet,
@@ -71,6 +75,10 @@ class MangaReaderScreen extends StatelessWidget {
       providers: [
         BlocProvider.value(value: sl<NovelPrefsCubit>()),
         BlocProvider.value(value: sl<MangaPrefsCubit>()),
+        // AI prefs in scope so the top bar's BlocBuilder can react
+        // to enable/disable toggles + key presence without us reading
+        // the cubit per build.
+        BlocProvider.value(value: sl<AiPrefsCubit>()),
         BlocProvider(
           create: (_) => MangaReaderBloc(
             providerRepo: sl<ProviderRepository>(),
@@ -865,6 +873,7 @@ class _ReaderViewState extends State<_ReaderView>
                   onOpenSettings: () => _openSettingsSheet(state),
                   onMarkComplete: () => _markCompleted(state),
                   onCycleDirection: _cycleReadingDirection,
+                  onOpenAiSummary: () => _openAiSummary(state),
                 ),
                 _BottomBar(
                   state: state,
@@ -992,6 +1001,75 @@ class _ReaderViewState extends State<_ReaderView>
   /// Marks the current book as Completed and bounces back to the detail
   /// screen. Single-tap with Undo — the snackbar action restores the
   /// previous status if the user mis-tapped.
+  /// Opens the AI summary sheet for the current manga chapter.
+  /// Lazily fetches every page's bytes through Dio (re-using any
+  /// headers the provider supplied for hotlink-protection bypass) and
+  /// hands the multimodal payload to the sheet. Caps the page list at
+  /// 25 evenly-sampled pages so the inline base64 payload stays under
+  /// Gemini's per-request size limit on long chapters.
+  Future<void> _openAiSummary(MangaReaderState state) async {
+    final book = state.book;
+    if (book == null || book.chapters.isEmpty || state.pages.isEmpty) {
+      ScaffoldMessenger.of(context).showAppSnackText(
+        'Chapter still loading — try again in a moment',
+      );
+      return;
+    }
+    final chapter = book.chapters[state.chapterIndex];
+    final allPages = state.pages;
+    // Sparse-sample down to 25 pages for very long chapters. We send
+    // the first and last pages explicitly so the AI sees the start
+    // and the climax, and fill the middle with an even stride.
+    const cap = 25;
+    final List<PageContent> selected;
+    if (allPages.length <= cap) {
+      selected = allPages;
+    } else {
+      final picked = <PageContent>[];
+      picked.add(allPages.first);
+      final step = (allPages.length - 2) / (cap - 2);
+      for (var i = 1; i < cap - 1; i++) {
+        final idx = (i * step).round().clamp(1, allPages.length - 2);
+        picked.add(allPages[idx]);
+      }
+      picked.add(allPages.last);
+      selected = picked;
+    }
+    await AiSummarySheet.show(
+      context,
+      sourceId: book.sourceId,
+      bookId: book.id,
+      chapterId: chapter.id,
+      chapterLabel: chapter.title,
+      kind: AiSummaryKind.manga,
+      preWarnImagesCount: selected.length,
+      fetchPayload: () async {
+        final dio = sl<Dio>();
+        final images = <AiImage>[];
+        for (final page in selected) {
+          try {
+            final resp = await dio.get<List<int>>(
+              page.url,
+              options: Options(
+                responseType: ResponseType.bytes,
+                headers: page.headers,
+              ),
+            );
+            final body = resp.data;
+            if (body == null || body.isEmpty) continue;
+            images.add(imageFromBytes(Uint8List.fromList(body)));
+          } catch (e) {
+            // Skip pages that fail to download — better to summarize
+            // a partial chapter than to abort the whole request.
+            debugPrint('[ai-summary] page fetch failed: $e');
+          }
+        }
+        if (images.isEmpty) return null;
+        return AiSummaryPayload(images: images);
+      },
+    );
+  }
+
   Future<void> _markCompleted(MangaReaderState state) async {
     final book = state.book;
     if (book == null) return;
@@ -1939,6 +2017,7 @@ class _TopBar extends StatelessWidget {
     required this.onOpenSettings,
     required this.onMarkComplete,
     required this.onCycleDirection,
+    required this.onOpenAiSummary,
   });
   final MangaReaderState state;
   final VoidCallback onBack;
@@ -1946,6 +2025,7 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onOpenSettings;
   final VoidCallback onMarkComplete;
   final VoidCallback onCycleDirection;
+  final VoidCallback onOpenAiSummary;
 
   @override
   Widget build(BuildContext context) {
@@ -2005,6 +2085,26 @@ class _TopBar extends StatelessWidget {
                           ),
                         ],
                       ),
+                    ),
+                    // AI summary — only shown when the user has both
+                    // enabled the feature and saved a key. Same gate
+                    // as the novel reader so the icon doesn't appear
+                    // for users who never set up AI integration.
+                    BlocBuilder<AiPrefsCubit, AiPrefs>(
+                      buildWhen: (a, b) =>
+                          a.enabled != b.enabled ||
+                          a.apiKeyPresent != b.apiKeyPresent,
+                      builder: (_, p) {
+                        if (!(p.enabled && p.apiKeyPresent)) {
+                          return const SizedBox.shrink();
+                        }
+                        return IconButton(
+                          tooltip: 'AI summary',
+                          icon: const Icon(Icons.auto_awesome_outlined,
+                              color: Colors.white),
+                          onPressed: onOpenAiSummary,
+                        );
+                      },
                     ),
                     // Most-used actions stay visible. Direction toggle,
                     // download, and mark-complete live in the overflow

@@ -107,6 +107,12 @@ class _SettingsView extends StatelessWidget {
                 onTap: () => context.push('/settings/security'),
               ),
               SettingsTile(
+                icon: Icons.auto_awesome_outlined,
+                title: 'AI integration',
+                subtitle: 'Gemini key + reader features',
+                onTap: () => context.push('/settings/ai'),
+              ),
+              SettingsTile(
                 icon: Icons.system_update_alt_rounded,
                 title: 'Updates',
                 subtitle: 'Check for new releases',

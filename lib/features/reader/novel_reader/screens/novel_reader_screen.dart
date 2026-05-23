@@ -13,9 +13,11 @@ import '../../../../core/models/book_detail.dart';
 import '../../../../core/repository/library_repository.dart';
 import '../../../../core/repository/provider_repository.dart';
 import '../../../../core/services/novel_tts_service.dart';
+import '../../../../core/state/ai_prefs_cubit.dart';
 import '../../../../core/state/novel_prefs_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/state_views.dart';
+import '../../widgets/ai_summary_sheet.dart';
 import '../../widgets/reading_bg_picker_sheet.dart';
 import '../widgets/dictionary_popup.dart';
 import '../widgets/draggable_auto_scroll_fab.dart';
@@ -38,8 +40,14 @@ class NovelReaderScreen extends StatelessWidget {
         providerRepo: sl<ProviderRepository>(),
         libraryRepo: sl<LibraryRepository>(),
       )..add(NovelReaderStarted(book: book, chapterIndex: chapterIndex)),
-      child: BlocProvider.value(
-        value: sl<NovelPrefsCubit>(),
+      child: MultiBlocProvider(
+        providers: [
+          BlocProvider.value(value: sl<NovelPrefsCubit>()),
+          // AI prefs in scope so the toolbar's BlocBuilder can react
+          // to enable/disable toggles + key presence without us
+          // having to read the cubit per build.
+          BlocProvider.value(value: sl<AiPrefsCubit>()),
+        ],
         child: const _NovelView(),
       ),
     );
@@ -538,6 +546,30 @@ class _NovelViewState extends State<_NovelView>
     _scroll.jumpTo(target);
   }
 
+  /// Opens the AI summary sheet for the current chapter. Novels just
+  /// hand the body text over — no image fetching needed. Surfaces a
+  /// snackbar if the chapter body hasn't loaded yet.
+  Future<void> _openAiSummary(BuildContext context) async {
+    final s = context.read<NovelReaderBloc>().state;
+    final book = s.book;
+    if (book == null || book.chapters.isEmpty || s.text.isEmpty) {
+      ScaffoldMessenger.of(context).showAppSnackText(
+        'Chapter still loading — try again in a moment',
+      );
+      return;
+    }
+    final chapter = book.chapters[s.chapterIndex];
+    await AiSummarySheet.show(
+      context,
+      sourceId: book.sourceId,
+      bookId: book.id,
+      chapterId: chapter.id,
+      chapterLabel: chapter.title,
+      kind: AiSummaryKind.novel,
+      fetchPayload: () async => AiSummaryPayload(text: s.text),
+    );
+  }
+
   Future<void> _openAutoScrollSheet(BuildContext context) async {
     final prefsCubit = context.read<NovelPrefsCubit>();
     final book = context.read<NovelReaderBloc>().state.book;
@@ -650,6 +682,27 @@ class _NovelViewState extends State<_NovelView>
           ),
         ),
         actions: [
+          // AI summary entry point. Only shows when the user has both
+          // enabled AI features and saved a key — otherwise the icon
+          // would lead nowhere useful and just take up toolbar real
+          // estate. Tap on the icon opens an inline sheet that calls
+          // Gemini with the chapter text.
+          BlocBuilder<AiPrefsCubit, AiPrefs>(
+            buildWhen: (a, b) =>
+                a.enabled != b.enabled ||
+                a.apiKeyPresent != b.apiKeyPresent,
+            builder: (_, p) {
+              if (!(p.enabled && p.apiKeyPresent)) {
+                return const SizedBox.shrink();
+              }
+              return IconButton(
+                icon: const Icon(Icons.auto_awesome_outlined),
+                color: fg,
+                tooltip: 'AI summary',
+                onPressed: () => _openAiSummary(context),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.task_alt_rounded),
             color: fg,

@@ -24,6 +24,7 @@ import '../../features/settings/screens/changelog_screen.dart';
 import '../../features/settings/screens/developers_settings_screen.dart';
 import '../../features/settings/screens/neural_voices_screen.dart';
 import '../../features/settings/screens/reading_settings_screen.dart';
+import '../../features/settings/screens/ai_settings_screen.dart';
 import '../../features/settings/screens/security_settings_screen.dart';
 import '../../features/settings/screens/settings_screen.dart';
 import '../../features/settings/screens/storage_settings_screen.dart';
@@ -270,6 +271,11 @@ GoRouter buildRouter() {
         path: '/settings/security',
         name: 'settings-security',
         builder: (_, _) => const SecuritySettingsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/ai',
+        name: 'settings-ai',
+        builder: (_, _) => const AiSettingsScreen(),
       ),
       GoRoute(
         path: '/settings/updates',

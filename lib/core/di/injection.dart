@@ -26,6 +26,8 @@ import '../repository/read_chapters_repository.dart';
 import '../repository/tracker_repository.dart';
 import '../repository/dictionary_repository.dart';
 import '../repository/voices_repository.dart';
+import '../services/ai/ai_client.dart';
+import '../services/ai/gemini_ai_client.dart';
 import '../services/apk_installer.dart';
 import '../services/changelog_service.dart';
 import '../services/chapter_check_service.dart';
@@ -51,6 +53,7 @@ import '../state/incognito_cubit.dart';
 import '../state/source_filter_cubit.dart';
 import '../state/manga_prefs_cubit.dart';
 import '../state/notifications_prefs_cubit.dart';
+import '../state/ai_prefs_cubit.dart';
 import '../state/novel_prefs_cubit.dart';
 import '../state/theme_cubit.dart';
 import '../sync/library_sync_service.dart';
@@ -175,6 +178,16 @@ Future<void> configureDependencies({AppLockCubit? appLock}) async {
   sl.registerLazySingleton<VoiceDownloader>(
     () => VoiceDownloader(dio: sl(), repo: sl()),
   );
+  // AI integration. Prefs cubit owns the API key + selected model;
+  // the Gemini client reads the key on demand at request time. The
+  // summaries repo caches generated text per chapter so re-asks are
+  // free.
+  sl.registerLazySingleton<AiPrefsCubit>(() => AiPrefsCubit());
+  sl.registerLazySingleton<AiClient>(
+    () => GeminiAiClient(prefs: sl<AiPrefsCubit>(), dio: sl()),
+  );
+  // SummariesRepository is registered with the loaded box from
+  // AppBootstrap (init() opens the Hive box asynchronously).
   // Persistent download-progress notification. Subscribes to the
   // downloads Hive box on `start()` (called from AppBootstrap) and
   // renders one throttled, replace-in-place notification summarising
