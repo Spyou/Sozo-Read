@@ -9,6 +9,7 @@ part of 'book_detail.dart';
 BookDetail _$BookDetailFromJson(Map<String, dynamic> json) => BookDetail(
   id: json['id'] as String,
   title: json['title'] as String,
+  englishTitle: json['englishTitle'] as String?,
   cover: json['cover'] as String?,
   coverHeaders: (json['coverHeaders'] as Map<String, dynamic>?)?.map(
     (k, e) => MapEntry(k, e as String),
@@ -37,6 +38,7 @@ Map<String, dynamic> _$BookDetailToJson(BookDetail instance) =>
     <String, dynamic>{
       'id': instance.id,
       'title': instance.title,
+      'englishTitle': instance.englishTitle,
       'cover': instance.cover,
       'coverHeaders': instance.coverHeaders,
       'url': instance.url,

@@ -9,6 +9,12 @@ part 'book_item.g.dart';
 class BookItem extends Equatable {
   final String id;
   final String title;
+
+  /// Optional English / romanized alternative title — populated by
+  /// scrapers that have access to it (e.g. MangaDex's `altTitles` array
+  /// or Chinese aggregators' Romaji subtitle). Null for scrapers that
+  /// don't provide it; the title-display helper falls back to [title].
+  final String? englishTitle;
   final String? cover;
   final Map<String, String>? coverHeaders;
   final String url;
@@ -18,6 +24,7 @@ class BookItem extends Equatable {
   const BookItem({
     required this.id,
     required this.title,
+    this.englishTitle,
     this.cover,
     this.coverHeaders,
     required this.url,
@@ -31,6 +38,7 @@ class BookItem extends Equatable {
   BookItem copyWith({
     String? id,
     String? title,
+    String? englishTitle,
     String? cover,
     Map<String, String>? coverHeaders,
     String? url,
@@ -40,6 +48,7 @@ class BookItem extends Equatable {
       BookItem(
         id: id ?? this.id,
         title: title ?? this.title,
+        englishTitle: englishTitle ?? this.englishTitle,
         cover: cover ?? this.cover,
         coverHeaders: coverHeaders ?? this.coverHeaders,
         url: url ?? this.url,
@@ -48,5 +57,14 @@ class BookItem extends Equatable {
       );
 
   @override
-  List<Object?> get props => [id, title, cover, coverHeaders, url, type, sourceId];
+  List<Object?> get props => [
+        id,
+        title,
+        englishTitle,
+        cover,
+        coverHeaders,
+        url,
+        type,
+        sourceId,
+      ];
 }

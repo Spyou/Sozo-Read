@@ -9,6 +9,7 @@ import '../../../core/services/voice_catalog.dart';
 import '../../../core/state/manga_prefs_cubit.dart';
 import '../../../core/state/notifications_prefs_cubit.dart';
 import '../../../core/state/novel_prefs_cubit.dart';
+import '../../../core/theme/app_colors.dart';
 import '../widgets/settings_dialogs.dart';
 import '../widgets/settings_widgets.dart';
 import '../widgets/voice_picker_sheet.dart';
@@ -34,6 +35,18 @@ class ReadingSettingsScreen extends StatelessWidget {
           builder: (context, p) {
             return ListView(
               children: [
+                const SettingsSectionLabel('Display'),
+                SettingsCard(
+                  children: [
+                    SettingsTile(
+                      icon: Icons.translate_rounded,
+                      title: 'Title language',
+                      subtitle: _titleModeLabel(p.titleDisplayMode),
+                      onTap: () =>
+                          _openTitleModePicker(context, p.titleDisplayMode),
+                    ),
+                  ],
+                ),
                 const SettingsSectionLabel('Manga'),
                 BlocBuilder<MangaPrefsCubit, MangaPrefs>(
                   builder: (context, m) => SettingsCard(
@@ -545,5 +558,91 @@ class _SliderTile extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// Short label shown in the subtitle of the Title-language row.
+String _titleModeLabel(TitleDisplayMode mode) {
+  switch (mode) {
+    case TitleDisplayMode.original:
+      return 'Original';
+    case TitleDisplayMode.english:
+      return 'English (when available)';
+    case TitleDisplayMode.both:
+      return 'Both';
+  }
+}
+
+/// Bottom-sheet picker for the three title-display modes. Matches the
+/// engine-picker / font-picker pattern used elsewhere in the reader
+/// settings.
+Future<void> _openTitleModePicker(
+  BuildContext context,
+  TitleDisplayMode current,
+) async {
+  final cubit = context.read<NovelPrefsCubit>();
+  final picked = await showModalBottomSheet<TitleDisplayMode>(
+    context: context,
+    backgroundColor: AppColors.surface,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (ctx) {
+      return SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 16, 8, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Title language',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              for (final m in TitleDisplayMode.values)
+                ListTile(
+                  title: Text(_titleModeLabel(m)),
+                  subtitle: Text(
+                    _titleModeDescription(m),
+                    style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                  trailing: m == current
+                      ? const Icon(Icons.check_rounded,
+                          color: AppColors.primary)
+                      : null,
+                  onTap: () => Navigator.pop(ctx, m),
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+  if (picked != null) cubit.setTitleDisplayMode(picked);
+}
+
+String _titleModeDescription(TitleDisplayMode mode) {
+  switch (mode) {
+    case TitleDisplayMode.original:
+      return 'Show the title exactly as the source provides it.';
+    case TitleDisplayMode.english:
+      return 'Show the English / romanized title when the source '
+          'provides one. Falls back to the original otherwise.';
+    case TitleDisplayMode.both:
+      return 'Show both the original and English titles, stacked.';
   }
 }

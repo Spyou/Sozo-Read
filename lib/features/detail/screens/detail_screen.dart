@@ -31,6 +31,8 @@ import '../../../core/services/cross_source_matcher.dart';
 import '../../../core/state/auth_service.dart';
 import '../../../core/state/auto_switch_prefs.dart';
 import '../../../core/state/chapter_sort_cubit.dart';
+import '../../../core/state/novel_prefs_cubit.dart';
+import '../../../core/utils/title_display.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/book_card.dart';
 import '../../../core/widgets/state_views.dart';
@@ -556,15 +558,23 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
             opacity: _showAppBarTitle ? 1 : 0,
             duration: const Duration(milliseconds: 180),
             curve: Curves.easeOut,
-            child: Text(
-              book.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -0.2,
+            child: BlocBuilder<NovelPrefsCubit, NovelPrefs>(
+              buildWhen: (a, b) =>
+                  a.titleDisplayMode != b.titleDisplayMode,
+              builder: (_, prefs) => Text(
+                primaryTitle(
+                  title: book.title,
+                  englishTitle: book.englishTitle,
+                  mode: prefs.titleDisplayMode,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.2,
+                ),
               ),
             ),
           ),
@@ -1522,18 +1532,73 @@ class _BackdropHeader extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        book.title,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -0.3,
-                          height: 1.15,
-                          shadows: [Shadow(blurRadius: 6, color: Colors.black87)],
-                        ),
+                      // Hero title — primary line follows the user's
+                      // title-display preference. When `both` mode is
+                      // active, the original (or english, depending
+                      // on which side primary picked) renders below as
+                      // a smaller subtitle so the user sees both
+                      // without ellipsing.
+                      BlocBuilder<NovelPrefsCubit, NovelPrefs>(
+                        buildWhen: (a, b) =>
+                            a.titleDisplayMode != b.titleDisplayMode,
+                        builder: (_, prefs) {
+                          final mode = prefs.titleDisplayMode;
+                          final primary = primaryTitle(
+                            title: book.title,
+                            englishTitle: book.englishTitle,
+                            mode: mode,
+                          );
+                          final secondary = subtitleTitle(
+                            title: book.title,
+                            englishTitle: book.englishTitle,
+                            mode: mode,
+                          );
+                          return Column(
+                            crossAxisAlignment:
+                                CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                primary,
+                                maxLines: 3,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: -0.3,
+                                  height: 1.15,
+                                  shadows: [
+                                    Shadow(
+                                      blurRadius: 6,
+                                      color: Colors.black87,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (secondary.isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  secondary,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                    height: 1.2,
+                                    shadows: [
+                                      Shadow(
+                                        blurRadius: 6,
+                                        color: Colors.black87,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ],
+                          );
+                        },
                       ),
                       const SizedBox(height: 8),
                       Row(

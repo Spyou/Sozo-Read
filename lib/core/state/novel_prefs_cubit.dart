@@ -17,6 +17,12 @@ enum ReadingBgMode { system, white, sepia, black }
 ///   download a voice pack (50-200 MB) before it can speak.
 enum TtsEngine { system, neural }
 
+/// Which version of a book's title to display across the app.
+/// `original` = whatever the scraper returned natively. `english` =
+/// `book.englishTitle` (falls back to original when null). `both` =
+/// original on one line, english below as a smaller subtitle.
+enum TitleDisplayMode { original, english, both }
+
 /// Global novel-reader typography preferences. Persisted in the shared
 /// Hive `settings` box.
 class NovelPrefsCubit extends Cubit<NovelPrefs> {
@@ -44,6 +50,7 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
   static const String _kShowFloatingAutoScroll =
       'novel.show_floating_auto_scroll';
   static const String _kShowFloatingTts = 'novel.show_floating_tts';
+  static const String _kTitleDisplayMode = 'app.title_display_mode';
   static const String _kVolumeButtons = 'reader.volume_buttons';
   /// Text-to-Speech voice rate. Mirrors the `autoScrollSpeed` pattern —
   /// a 0..1 continuous value, persisted in the shared settings box.
@@ -78,6 +85,8 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
   static const double defaultAutoScrollSpeed = 0.33;
   static const bool defaultShowFloatingAutoScroll = true;
   static const bool defaultShowFloatingTts = true;
+  static const TitleDisplayMode defaultTitleDisplayMode =
+      TitleDisplayMode.original;
   /// Default TTS voice rate. The flutter_tts plugin maps 0..1 onto the
   /// native engine's range; 0.5 sounds natural on Android + iOS.
   static const double defaultTtsRate = 0.5;
@@ -200,6 +209,7 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
               defaultShowFloatingAutoScroll,
       showFloatingTts:
           (_box.get(_kShowFloatingTts) as bool?) ?? defaultShowFloatingTts,
+      titleDisplayMode: _readTitleDisplayMode(),
       useVolumeButtons:
           (_box.get(_kVolumeButtons) as bool?) ?? defaultUseVolumeButtons,
       ttsRate: ((_box.get(_kTtsRate) as num?)?.toDouble() ?? defaultTtsRate)
@@ -407,6 +417,24 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
     emit(state.copyWith(showFloatingTts: v));
   }
 
+  void setTitleDisplayMode(TitleDisplayMode mode) {
+    if (mode == state.titleDisplayMode) return;
+    _box.put(_kTitleDisplayMode, mode.name);
+    emit(state.copyWith(titleDisplayMode: mode));
+  }
+
+  /// Hive stores the enum by `.name`; this resolves back to the typed
+  /// value. Unknown values (e.g. a future-only mode read by an older
+  /// build) fall back to the default rather than throwing.
+  static TitleDisplayMode _readTitleDisplayMode() {
+    final raw = _box.get(_kTitleDisplayMode) as String?;
+    if (raw == null) return defaultTitleDisplayMode;
+    for (final m in TitleDisplayMode.values) {
+      if (m.name == raw) return m;
+    }
+    return defaultTitleDisplayMode;
+  }
+
   void setTtsRate(double v) {
     final clamped = v.clamp(0.0, 1.0);
     if (clamped == state.ttsRate) return;
@@ -582,6 +610,7 @@ class NovelPrefs {
     this.showFloatingAutoScroll =
         NovelPrefsCubit.defaultShowFloatingAutoScroll,
     this.showFloatingTts = NovelPrefsCubit.defaultShowFloatingTts,
+    this.titleDisplayMode = NovelPrefsCubit.defaultTitleDisplayMode,
     this.ttsRate = NovelPrefsCubit.defaultTtsRate,
     this.ttsLanguage = NovelPrefsCubit.defaultTtsLanguage,
     this.ttsVoiceName,
@@ -628,6 +657,11 @@ class NovelPrefs {
   /// Whether the bottom-right "Read aloud" FAB shows when TTS is not
   /// loaded. Independent of the active mini-player pill.
   final bool showFloatingTts;
+
+  /// Which version of each book's title to render. Drives the global
+  /// title-display helper. Default is `original` so existing scrapers
+  /// (which don't populate `englishTitle`) behave exactly as before.
+  final TitleDisplayMode titleDisplayMode;
 
   /// Text-to-Speech voice rate (0..1). Applied via
   /// [NovelTtsService.setRate].
@@ -684,6 +718,7 @@ class NovelPrefs {
     double? autoScrollSpeed,
     bool? showFloatingAutoScroll,
     bool? showFloatingTts,
+    TitleDisplayMode? titleDisplayMode,
     bool? useVolumeButtons,
     double? ttsRate,
     String? ttsLanguage,
@@ -720,6 +755,7 @@ class NovelPrefs {
         showFloatingAutoScroll:
             showFloatingAutoScroll ?? this.showFloatingAutoScroll,
         showFloatingTts: showFloatingTts ?? this.showFloatingTts,
+        titleDisplayMode: titleDisplayMode ?? this.titleDisplayMode,
         useVolumeButtons: useVolumeButtons ?? this.useVolumeButtons,
         ttsRate: ttsRate ?? this.ttsRate,
         ttsLanguage: ttsLanguage ?? this.ttsLanguage,
@@ -766,6 +802,7 @@ class NovelPrefs {
     if (other.autoScrollSpeed != autoScrollSpeed) return false;
     if (other.showFloatingAutoScroll != showFloatingAutoScroll) return false;
     if (other.showFloatingTts != showFloatingTts) return false;
+    if (other.titleDisplayMode != titleDisplayMode) return false;
     if (other.ttsRate != ttsRate) return false;
     if (other.ttsLanguage != ttsLanguage) return false;
     if (other.ttsVoiceName != ttsVoiceName) return false;
@@ -817,6 +854,7 @@ class NovelPrefs {
         autoScrollSpeed,
         showFloatingAutoScroll,
         showFloatingTts,
+        titleDisplayMode,
         ttsRate,
         Object.hash(
           ttsLanguage,

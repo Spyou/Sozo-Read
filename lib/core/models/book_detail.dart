@@ -23,6 +23,11 @@ enum BookStatus {
 class BookDetail extends Equatable {
   final String id;
   final String title;
+
+  /// Optional English / romanized alternative title — populated by
+  /// scrapers that have access to it. Null for scrapers that don't
+  /// provide one; the title-display helper falls back to [title].
+  final String? englishTitle;
   final String? cover;
   final Map<String, String>? coverHeaders;
   final String url;
@@ -37,6 +42,7 @@ class BookDetail extends Equatable {
   const BookDetail({
     required this.id,
     required this.title,
+    this.englishTitle,
     this.cover,
     this.coverHeaders,
     required this.url,
@@ -53,5 +59,19 @@ class BookDetail extends Equatable {
   Map<String, dynamic> toJson() => _$BookDetailToJson(this);
 
   @override
-  List<Object?> get props => [id, title, cover, coverHeaders, url, description, status, genres, authors, chapters, type, sourceId];
+  List<Object?> get props => [
+        id,
+        title,
+        englishTitle,
+        cover,
+        coverHeaders,
+        url,
+        description,
+        status,
+        genres,
+        authors,
+        chapters,
+        type,
+        sourceId,
+      ];
 }

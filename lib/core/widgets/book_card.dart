@@ -1,10 +1,13 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import '../services/image_cache_manager.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:shimmer/shimmer.dart';
 
 import '../models/book_item.dart';
+import '../state/novel_prefs_cubit.dart';
 import '../theme/app_colors.dart';
+import '../utils/title_display.dart';
 
 class BookCard extends StatelessWidget {
   const BookCard({
@@ -72,33 +75,66 @@ class BookCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 8),
-            // `Flexible` lets the title (2 lines max) shrink to whatever
-            // space the grid leaves after the cover. Long titles
-            // ("Shin Sekai Builders! ~Class 24…") otherwise overflow the
-            // card by ~10px when the parent's height constraint is tight.
+            // `Flexible` lets the title block (2 lines max + optional
+            // subtitle) shrink to whatever space the grid leaves after
+            // the cover. Long titles otherwise overflow the card by
+            // ~10 px when the parent's height constraint is tight.
+            //
+            // BlocBuilder reactively picks english / original / both
+            // based on user prefs. Existing `subtitle` parameter (used
+            // by callers for source labels) wins over the mode-derived
+            // subtitle so source labels stay visible regardless of
+            // title mode.
             Flexible(
-              child: Text(
-                book.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(height: 1.15),
+              child: BlocBuilder<NovelPrefsCubit, NovelPrefs>(
+                buildWhen: (a, b) =>
+                    a.titleDisplayMode != b.titleDisplayMode,
+                builder: (_, prefs) {
+                  final mode = prefs.titleDisplayMode;
+                  final primary = primaryTitle(
+                    title: book.title,
+                    englishTitle: book.englishTitle,
+                    mode: mode,
+                  );
+                  final modeSubtitle = subtitle ??
+                      subtitleTitle(
+                        title: book.title,
+                        englishTitle: book.englishTitle,
+                        mode: mode,
+                      );
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        primary,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(height: 1.15),
+                      ),
+                      if (modeSubtitle.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          modeSubtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(
+                                color: AppColors.textSecondary,
+                                fontSize: 11,
+                              ),
+                        ),
+                      ],
+                    ],
+                  );
+                },
               ),
             ),
-            if (subtitle != null) ...[
-              const SizedBox(height: 2),
-              Text(
-                subtitle!,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: AppColors.textSecondary,
-                      fontSize: 11,
-                    ),
-              ),
-            ],
           ],
         ),
       ),
