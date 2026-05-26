@@ -10,6 +10,7 @@ import '../../features/detail/screens/detail_screen.dart';
 import '../../features/downloads/screens/downloads_screen.dart';
 import '../../features/genre_browse/screens/genre_browse_screen.dart';
 import '../../features/history/screens/history_screen.dart';
+import '../../features/home/screens/catalog_screen.dart';
 import '../../features/home/screens/home_screen.dart';
 import '../../features/library/screens/library_screen.dart';
 import '../../features/notifications/screens/notifications_screen.dart';
@@ -195,6 +196,20 @@ GoRouter buildRouter() {
             repoUrl: repoUrl,
             displayName: displayName,
           );
+        },
+      ),
+      GoRoute(
+        path: '/home/catalog/:sectionId',
+        name: 'home-catalog',
+        builder: (_, state) {
+          final sectionId = state.pathParameters['sectionId'] ?? '';
+          // Title comes via `extra` from the home screen for the right
+          // casing ("Latest Updates", not "latest"). Deep links and other
+          // entry points get a sensible fallback from the id.
+          final title = (state.extra is String && (state.extra as String).isNotEmpty)
+              ? state.extra as String
+              : _titleForSectionId(sectionId);
+          return CatalogScreen(sectionId: sectionId, title: title);
         },
       ),
       GoRoute(
@@ -419,6 +434,19 @@ String _resolveInitialLocation() {
     return raw;
   }
   return fallback;
+}
+
+String _titleForSectionId(String id) {
+  switch (id) {
+    case 'popular':
+      return 'Popular';
+    case 'latest':
+      return 'Latest Updates';
+    case 'trending':
+      return 'Trending';
+    default:
+      return id.isEmpty ? 'Catalog' : id;
+  }
 }
 
 class _ShellScaffold extends StatelessWidget {

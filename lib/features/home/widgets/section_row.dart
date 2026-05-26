@@ -13,6 +13,7 @@ class SectionRow extends StatelessWidget {
     this.error,
     this.onTapBook,
     this.onLongPressBook,
+    this.onSeeAll,
   });
 
   final String title;
@@ -21,6 +22,7 @@ class SectionRow extends StatelessWidget {
   final String? error;
   final void Function(BookItem book)? onTapBook;
   final void Function(BookItem book)? onLongPressBook;
+  final VoidCallback? onSeeAll;
 
   @override
   Widget build(BuildContext context) {
@@ -51,6 +53,9 @@ class SectionRow extends StatelessWidget {
                     letterSpacing: -0.2,
                   ),
                 ),
+                const Spacer(),
+                if (onSeeAll != null && books.isNotEmpty)
+                  _SeeAllButton(onTap: onSeeAll!),
               ],
             ),
           ),
@@ -101,6 +106,41 @@ class SectionRow extends StatelessWidget {
       ),
       separatorBuilder: (_, _) => const SizedBox(width: 12),
       itemCount: books.length,
+    );
+  }
+}
+
+class _SeeAllButton extends StatelessWidget {
+  const _SeeAllButton({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Text(
+              'See all',
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            SizedBox(width: 2),
+            Icon(
+              Icons.chevron_right_rounded,
+              size: 18,
+              color: AppColors.textSecondary,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -208,6 +208,10 @@ class _HomeViewState extends State<_HomeView> {
                             onTapBook: (b) => _openDetail(context, b),
                             onLongPressBook: (b) =>
                                 showBookCardActionSheet(context, b),
+                            onSeeAll: () => context.push(
+                              '/home/catalog/${s.id}',
+                              extra: s.title,
+                            ),
                           ),
                         ),
                       const SliverToBoxAdapter(child: SizedBox(height: 40)),
