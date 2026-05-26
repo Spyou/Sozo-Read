@@ -327,14 +327,6 @@ class _SourceTile extends StatelessWidget {
               const SizedBox(width: 8),
               const _CiFlaggedPill(),
             ],
-            // Cheap "slow" hint when CI consistently sees high latency —
-            // not an error, just useful context.
-            if (item.health == ProviderHealthStatus.healthy &&
-                remote != null &&
-                remote.status == RemoteProviderStatus.slow) ...[
-              const SizedBox(width: 8),
-              const _SlowPill(),
-            ],
           ],
         ),
         subtitle: Text(
@@ -426,17 +418,6 @@ class _CiFlaggedPill extends StatelessWidget {
   }
 }
 
-/// Pill shown when CI consistently sees slow responses from a source.
-/// Not an error — works, just sluggish.
-class _SlowPill extends StatelessWidget {
-  const _SlowPill();
-
-  @override
-  Widget build(BuildContext context) {
-    return _PillChrome(color: Colors.blueGrey.shade300, label: 'SLOW');
-  }
-}
-
 class _PillChrome extends StatelessWidget {
   const _PillChrome({required this.color, required this.label});
   final Color color;
@@ -477,18 +458,9 @@ String _subtitleFor(SourceItem item) {
     return item.healthError!;
   }
   final remote = item.remoteHealth;
-  if (remote != null) {
-    if (remote.isProblem) {
-      final detail = remote.error ?? remote.shortLabel;
-      return 'CI: $detail';
-    }
-    if (remote.status == RemoteProviderStatus.slow && remote.latencyMs != null) {
-      final seconds = (remote.latencyMs! / 1000).toStringAsFixed(1);
-      final base = item.info != null
-          ? '${item.info!.lang} • ${item.info!.type.name} • v${item.info!.version ?? '?'}'
-          : (item.loaded ? 'loaded' : 'not loaded');
-      return '$base • slow (~${seconds}s)';
-    }
+  if (remote != null && remote.isProblem) {
+    final detail = remote.error ?? remote.shortLabel;
+    return 'CI: $detail';
   }
   if (item.info != null) {
     return '${item.info!.lang} • ${item.info!.type.name} • v${item.info!.version ?? '?'}';
