@@ -8,6 +8,7 @@ import 'package:hive/hive.dart';
 
 import 'core/app_bootstrap.dart';
 import 'core/di/injection.dart';
+import 'core/provider/provider_registry.dart';
 import 'core/router/app_router.dart' show buildRouter, parseSozoReadDeepLink;
 import 'core/security/app_lock_cubit.dart';
 import 'core/services/chapter_check_service.dart';
@@ -48,6 +49,21 @@ void main() async {
     'freewebnovel',
     'novelbin',
   ]);
+  // Re-inject every installed provider (including repo-installed ones)
+  // into the QuickJS runtime. The runtime is process-memory only — when
+  // Android kills the app, all loaded providers are gone on cold start.
+  // Without this call only the bundled providers above are loaded and
+  // the user has to manually refresh each repo source after every
+  // launch.
+  //
+  // Fire-and-forget so splash isn't blocked. `force: false` serves
+  // each provider's JS from the ProviderDownloader Hive cache, no
+  // network call required (~10-50 ms per provider). Same-sourceId
+  // collisions with a bundled provider are resolved by
+  // `loadIntoRuntime` — the LAST one wins, which is the right
+  // precedence for users who installed a newer version from a repo.
+  // ignore: discarded_futures
+  sl<ProviderRegistry>().loadAll();
   runApp(const SozoReadApp());
 }
 

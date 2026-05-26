@@ -97,25 +97,21 @@ class _SettingsView extends StatelessWidget {
               SettingsTile(
                 icon: Icons.sync_alt_rounded,
                 title: 'Trackers',
-                subtitle: 'AniList sync',
                 onTap: () => context.push('/settings/trackers'),
               ),
               SettingsTile(
                 icon: Icons.lock_outline_rounded,
                 title: 'Security',
-                subtitle: 'App Lock, Incognito, privacy',
                 onTap: () => context.push('/settings/security'),
               ),
               SettingsTile(
                 icon: Icons.auto_awesome_outlined,
                 title: 'AI integration',
-                subtitle: 'Gemini key + reader features',
                 onTap: () => context.push('/settings/ai'),
               ),
               SettingsTile(
                 icon: Icons.system_update_alt_rounded,
                 title: 'Updates',
-                subtitle: 'Check for new releases',
                 onTap: () => context.push('/settings/updates'),
               ),
               const _AutoSwitchTile(),
@@ -350,7 +346,6 @@ class _AutoSwitchTileState extends State<_AutoSwitchTile> {
     return SettingsTile(
       icon: Icons.alt_route_rounded,
       title: 'Auto-switch sources',
-      subtitle: 'On failure, try other sources',
       onTap: () => _toggle(!_enabled),
       trailing: Switch.adaptive(
         value: _enabled,

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "_comment": "Public directory of community Sozo Read source repos. Submissions: open a PR to Spyou/sozoread-directory. Keep each entry minimal — name + repoUrl are the only required fields.",
+  "entries": [
+    {
+      "name": "Spyou's manga + novel sources",
+      "author": "Spyou",
+      "repoUrl": "https://raw.githubusercontent.com/Spyou/sozoread-providers/main/index.json",
+      "description": "Official source pack: MangaDex, WeebCentral, MangaPill, MangaKatana, FreeWebNovel, NovelBin. The default repo bundled with the app.",
+      "tags": ["manga", "novel", "english", "official"],
+      "verified": true
+    }
+  ]
+}

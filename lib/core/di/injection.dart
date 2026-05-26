@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:get_it/get_it.dart';
 
 import '../../features/home/bloc/home_bloc.dart';
@@ -30,6 +31,7 @@ import '../services/ai/ai_client.dart';
 import '../services/ai/gemini_ai_client.dart';
 import '../services/apk_installer.dart';
 import '../services/changelog_service.dart';
+import '../services/directory_service.dart';
 import '../services/chapter_check_service.dart';
 import '../services/cross_source_matcher.dart';
 import '../services/download_notification_service.dart';
@@ -188,6 +190,18 @@ Future<void> configureDependencies({AppLockCubit? appLock}) async {
   );
   // SummariesRepository is registered with the loaded box from
   // AppBootstrap (init() opens the Hive box asynchronously).
+  // Sozo Read directory — fetches the curated repo list from a single
+  // JSON file Spyou maintains. URL is configurable via .env
+  // DIRECTORY_URL; falls back to the canonical sozoread-directory
+  // raw URL when unset (covers users who installed without an .env).
+  sl.registerLazySingleton<DirectoryService>(
+    () => DirectoryService(
+      dio: sl(),
+      url: dotenv.maybeGet('DIRECTORY_URL')?.trim().isNotEmpty == true
+          ? dotenv.get('DIRECTORY_URL').trim()
+          : 'https://raw.githubusercontent.com/Spyou/sozoread-directory/main/index.json',
+    ),
+  );
   // Persistent download-progress notification. Subscribes to the
   // downloads Hive box on `start()` (called from AppBootstrap) and
   // renders one throttled, replace-in-place notification summarising

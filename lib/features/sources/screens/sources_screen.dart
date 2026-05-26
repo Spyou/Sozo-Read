@@ -8,10 +8,12 @@ import 'package:go_router/go_router.dart';
 import 'package:hive/hive.dart';
 
 import '../../../core/di/injection.dart';
+import '../../../core/models/directory_entry.dart';
 import '../../../core/provider/provider_manager.dart';
 import '../../../core/provider/provider_registry.dart';
 import '../../../core/provider/provider_repo_registry.dart';
 import '../../../core/repository/provider_repository.dart';
+import '../../../core/services/directory_service.dart';
 import '../../../core/state/source_filter_cubit.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/app_snack.dart';
@@ -50,7 +52,7 @@ class _SourcesViewState extends State<_SourcesView>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     _tabController.addListener(() {
       if (_tabController.indexIsChanging) return;
       if (_currentTab != _tabController.index) {
@@ -65,58 +67,6 @@ class _SourcesViewState extends State<_SourcesView>
     super.dispose();
   }
 
-  Future<void> _showInstallDialog(BuildContext context) async {
-    final nameCtrl = TextEditingController();
-    final urlCtrl = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: const Text('Add provider'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameCtrl,
-              decoration:
-                  const InputDecoration(labelText: 'Name (e.g. mangadex)'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: urlCtrl,
-              decoration: const InputDecoration(labelText: 'JS raw URL'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Install'),
-          ),
-        ],
-      ),
-    );
-    if (ok == true &&
-        nameCtrl.text.trim().isNotEmpty &&
-        urlCtrl.text.trim().isNotEmpty) {
-      if (!context.mounted) return;
-      // Manual installs from the dialog have no repo of origin — they
-      // get tagged as a user-added entry so they still receive a
-      // composite key (registry falls back to a synthetic origin).
-      context.read<SourcesBloc>().add(
-            SourceInstalled(
-              name: nameCtrl.text.trim(),
-              url: urlCtrl.text.trim(),
-              displayName: 'User-added',
-            ),
-          );
-    }
-  }
-
   Future<void> _showAddRepoDialog(BuildContext context) async {
     await showDialog<void>(
       context: context,
@@ -127,6 +77,7 @@ class _SourcesViewState extends State<_SourcesView>
   @override
   Widget build(BuildContext context) {
     final isInstalled = _currentTab == 0;
+    final isRepos = _currentTab == 1;
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -149,23 +100,31 @@ class _SourcesViewState extends State<_SourcesView>
           tabs: const [
             Tab(text: 'Installed'),
             Tab(text: 'Repos'),
+            Tab(text: 'Discover'),
           ],
         ),
       ),
-      floatingActionButton: Builder(
-        builder: (ctx) => FloatingActionButton(
-          backgroundColor: AppColors.primary,
-          onPressed: () => isInstalled
-              ? _showInstallDialog(ctx)
-              : _showAddRepoDialog(ctx),
-          child: const Icon(Icons.add),
-        ),
-      ),
+      // FAB lives only on the Repos tab — that's where adding a manifest
+      // URL is the primary action. The Installed tab is a view of what
+      // the user already has; new installs go through Repos → tap an
+      // Install pill on a source row. The Discover tab pulls from the
+      // central directory so there's nothing for the user to add by
+      // hand there either.
+      floatingActionButton: isRepos
+          ? Builder(
+              builder: (ctx) => FloatingActionButton(
+                backgroundColor: AppColors.primary,
+                onPressed: () => _showAddRepoDialog(ctx),
+                child: const Icon(Icons.add),
+              ),
+            )
+          : null,
       body: TabBarView(
         controller: _tabController,
         children: const [
           _InstalledTab(),
           _ReposTab(),
+          _DiscoverTab(),
         ],
       ),
     );
@@ -1250,6 +1209,555 @@ class _AddRepoDialogState extends State<_AddRepoDialog> {
                   ),
                 )
               : const Text('Add'),
+        ),
+      ],
+    );
+  }
+}
+
+// -----------------------------------------------------------------------
+// Discover tab
+// -----------------------------------------------------------------------
+
+/// Lists curated repos pulled from the public Sozo Read directory.
+/// Each card is one repo entry; tapping Install adds the repo URL to
+/// [ProviderReposRegistry] via the same path the default-repo seeding
+/// uses at bootstrap.
+///
+/// Fetch + cache logic lives in [DirectoryService]; this widget is
+/// only the UI layer.
+class _DiscoverTab extends StatefulWidget {
+  const _DiscoverTab();
+
+  @override
+  State<_DiscoverTab> createState() => _DiscoverTabState();
+}
+
+class _DiscoverTabState extends State<_DiscoverTab>
+    with AutomaticKeepAliveClientMixin {
+  late Future<List<DirectoryEntry>> _future;
+  // Tracks which entries are currently being installed so we can show
+  // a spinner inline on the matching card without freezing the others.
+  final Set<String> _installing = <String>{};
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void initState() {
+    super.initState();
+    final svc = sl<DirectoryService>();
+    final cached = svc.cached();
+    if (cached != null && cached.isNotEmpty) {
+      // Render the cached entries instantly so the user never sees a
+      // spinner when they have a previously-fetched copy.
+      _future = Future.value(cached);
+      // Stale-while-revalidate: kick off a network refresh in the
+      // background if the cache is older than the soft threshold (5
+      // min). Catches "I just added a new entry on GitHub" without
+      // waiting out the full 24h TTL. Errors are swallowed — UI
+      // already shows the cached copy.
+      final cachedAt = svc.cachedAt();
+      final softStale = cachedAt == null ||
+          DateTime.now().difference(cachedAt) >
+              const Duration(minutes: 5);
+      if (softStale) {
+        // ignore: discarded_futures
+        svc.refresh(force: true).then((fresh) {
+          if (!mounted) return;
+          setState(() => _future = Future.value(fresh));
+        }).catchError((_) {/* keep showing cache */});
+      }
+    } else {
+      _future = svc.refresh();
+    }
+  }
+
+  Future<void> _hardRefresh() async {
+    setState(() {
+      _future = sl<DirectoryService>().refresh(force: true);
+    });
+    await _future;
+  }
+
+  /// Installs a directory entry's repo URL. Idempotent — if the user
+  /// already had the repo tracked, this just shows "Already added".
+  /// On success the Repos tab will reactively pick up the new entry
+  /// since it listens to the repos Hive box.
+  Future<void> _install(DirectoryEntry entry) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final repos = sl<ProviderReposRegistry>();
+    if (repos.has(entry.repoUrl)) {
+      messenger.showAppSnackText('${entry.name} is already added');
+      return;
+    }
+    setState(() => _installing.add(entry.repoUrl));
+    try {
+      final added = await repos.seedDefaultRepo(entry.repoUrl);
+      if (!mounted) return;
+      messenger.showAppSnackText(
+        added
+            ? 'Added ${entry.name} — open the Repos tab to install sources'
+            : '${entry.name} is already added',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showAppSnackText('Failed to add ${entry.name}: $e');
+    } finally {
+      if (mounted) setState(() => _installing.remove(entry.repoUrl));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return RefreshIndicator(
+      onRefresh: _hardRefresh,
+      color: AppColors.primary,
+      child: FutureBuilder<List<DirectoryEntry>>(
+        future: _future,
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting &&
+              !snap.hasData) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: CircularProgressIndicator(
+                  color: AppColors.primary,
+                ),
+              ),
+            );
+          }
+          if (snap.hasError && !snap.hasData) {
+            return _DiscoverError(
+              error: snap.error.toString(),
+              onRetry: _hardRefresh,
+            );
+          }
+          final entries = snap.data ?? const <DirectoryEntry>[];
+          if (entries.isEmpty) {
+            return const _DiscoverEmpty();
+          }
+          return ListView.builder(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+            itemCount: entries.length + 1,
+            itemBuilder: (_, i) {
+              if (i == 0) return const _DiscoverHeader();
+              final entry = entries[i - 1];
+              return _DiscoverCard(
+                entry: entry,
+                installing: _installing.contains(entry.repoUrl),
+                onInstall: () => _install(entry),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _DiscoverHeader extends StatelessWidget {
+  const _DiscoverHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        decoration: BoxDecoration(
+          color: AppColors.primary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: AppColors.primary.withValues(alpha: 0.22),
+            width: 0.6,
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(
+              Icons.explore_outlined,
+              color: AppColors.primary,
+              size: 20,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Community-maintained source packs. Tap Install to add '
+                'one to your Repos tab. Use at your own risk — sources '
+                'are written by third parties.',
+                style: TextStyle(
+                  color: AppColors.textSecondary.withValues(alpha: 0.9),
+                  fontSize: 12,
+                  height: 1.4,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DiscoverCard extends StatelessWidget {
+  const _DiscoverCard({
+    required this.entry,
+    required this.installing,
+    required this.onInstall,
+  });
+
+  final DirectoryEntry entry;
+  final bool installing;
+  final VoidCallback onInstall;
+
+  /// Streams `true`/`false` for whether the entry's repoUrl is
+  /// currently tracked in [ProviderReposRegistry]. Emits the current
+  /// value immediately, then again whenever the repos Hive box
+  /// changes. Drives the Install -> Installed swap.
+  Stream<bool> _installedStream() async* {
+    final repos = sl<ProviderReposRegistry>();
+    yield repos.has(entry.repoUrl);
+    await for (final _ in repos.watch()) {
+      yield repos.has(entry.repoUrl);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppColors.divider.withValues(alpha: 0.6),
+          width: 0.6,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _Logo(
+                logoUrl: entry.logo,
+                author: entry.author,
+                fallbackSeed: entry.name,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            entry.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppColors.textPrimary,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        if (entry.verified) ...[
+                          const SizedBox(width: 6),
+                          const Icon(
+                            Icons.verified_rounded,
+                            size: 16,
+                            color: AppColors.primary,
+                          ),
+                        ],
+                      ],
+                    ),
+                    if (entry.author.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        'by ${entry.author}',
+                        style: const TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                height: 34,
+                child: StreamBuilder<bool>(
+                  stream: _installedStream(),
+                  initialData:
+                      sl<ProviderReposRegistry>().has(entry.repoUrl),
+                  builder: (_, snap) {
+                    final installed = snap.data ?? false;
+                    // Three visual states:
+                    //   1. Currently installing → spinner, disabled
+                    //   2. Repo already tracked → "Installed" pill in
+                    //      muted style + check, disabled
+                    //   3. Otherwise → primary "Install" button.
+                    if (installing) {
+                      return FilledButton(
+                        onPressed: null,
+                        style: FilledButton.styleFrom(
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 14),
+                        ),
+                        child: const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        ),
+                      );
+                    }
+                    if (installed) {
+                      return OutlinedButton.icon(
+                        onPressed: null,
+                        style: OutlinedButton.styleFrom(
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 12),
+                          foregroundColor: AppColors.primary,
+                          side: BorderSide(
+                            color: AppColors.primary
+                                .withValues(alpha: 0.5),
+                          ),
+                        ),
+                        icon: const Icon(Icons.check_rounded, size: 16),
+                        label: const Text('Installed'),
+                      );
+                    }
+                    return FilledButton(
+                      onPressed: onInstall,
+                      style: FilledButton.styleFrom(
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 14),
+                      ),
+                      child: const Text('Install'),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+          if (entry.description.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(
+              entry.description,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 13,
+                height: 1.4,
+              ),
+            ),
+          ],
+          if (entry.tags.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final t in entry.tags.take(4))
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.card.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      t,
+                      style: const TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Small square logo at the leading edge of each card. Three-tier
+/// fallback:
+///   1. Explicit [logoUrl] from the directory entry (author can ship a
+///      custom badge).
+///   2. GitHub avatar derived from [author] (`github.com/<x>.png`
+///      redirects to the user's avatar; covers 99% of entries since
+///      the schema asks for a GitHub handle).
+///   3. Tinted initial letter from [fallbackSeed] when neither works
+///      or both 404.
+class _Logo extends StatelessWidget {
+  const _Logo({
+    required this.logoUrl,
+    required this.author,
+    required this.fallbackSeed,
+  });
+
+  final String? logoUrl;
+  final String author;
+  final String fallbackSeed;
+
+  /// First non-empty URL we should try to render. Null when neither
+  /// an explicit logo nor a GitHub-handle author is available.
+  String? get _effectiveUrl {
+    final l = logoUrl?.trim();
+    if (l != null && l.isNotEmpty) return l;
+    final a = author.trim();
+    if (a.isEmpty) return null;
+    // GitHub treats `<handle>.png` as a redirect to the user's avatar.
+    // Non-existent handles return 404, which the errorWidget below
+    // catches and swaps for the initial-letter placeholder.
+    return 'https://github.com/${Uri.encodeComponent(a)}.png';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final url = _effectiveUrl;
+    if (url != null) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: CachedNetworkImage(
+          imageUrl: url,
+          width: 44,
+          height: 44,
+          fit: BoxFit.cover,
+          cacheManager: AppImageCacheManager(),
+          errorWidget: (_, _, _) => _placeholder(fallbackSeed),
+        ),
+      );
+    }
+    return _placeholder(fallbackSeed);
+  }
+
+  Widget _placeholder(String seed) {
+    final letter =
+        seed.trim().isEmpty ? '?' : seed.trim()[0].toUpperCase();
+    return Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        letter,
+        style: const TextStyle(
+          color: AppColors.primary,
+          fontSize: 18,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class _DiscoverError extends StatelessWidget {
+  const _DiscoverError({required this.error, required this.onRetry});
+  final String error;
+  final Future<void> Function() onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(24),
+      children: [
+        const SizedBox(height: 80),
+        const Icon(
+          Icons.cloud_off_rounded,
+          size: 48,
+          color: AppColors.textTertiary,
+        ),
+        const SizedBox(height: 12),
+        Text(
+          "Couldn't load the directory",
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          error,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 14),
+        Center(
+          child: OutlinedButton.icon(
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('Try again'),
+            onPressed: () {
+              // ignore: discarded_futures
+              onRetry();
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DiscoverEmpty extends StatelessWidget {
+  const _DiscoverEmpty();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(24),
+      children: const [
+        SizedBox(height: 80),
+        Icon(
+          Icons.explore_off_rounded,
+          size: 48,
+          color: AppColors.textTertiary,
+        ),
+        SizedBox(height: 12),
+        Center(
+          child: Text(
+            'No directory entries yet',
+            style: TextStyle(
+              color: AppColors.textPrimary,
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        SizedBox(height: 6),
+        Center(
+          child: Text(
+            'Check back later — the curated list will grow over time.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 12,
+            ),
+          ),
         ),
       ],
     );

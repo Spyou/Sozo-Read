@@ -63,6 +63,9 @@ class DetailScreen extends StatelessWidget {
           // Threaded through so the bloc can do a cache lookup without
           // waiting for the network — see DetailBloc._fetch.
           bookId: placeholder?.id,
+          // Title for the auto-switch fanout when detail fetch fails
+          // before anything else (cache, library) can supply one.
+          placeholderTitle: placeholder?.title,
         )),
       child: _DetailView(placeholder: placeholder),
     );

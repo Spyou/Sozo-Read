@@ -13,6 +13,7 @@ class DetailLoaded extends DetailEvent {
     required this.sourceId,
     required this.url,
     this.bookId,
+    this.placeholderTitle,
   });
   final String sourceId;
   final String url;
@@ -23,8 +24,14 @@ class DetailLoaded extends DetailEvent {
   /// network round-trip. Falls back to a cache-miss when omitted.
   final String? bookId;
 
+  /// Optional — placeholder title from the source card / search row.
+  /// Used as the last-resort title for the auto-switch fallback search
+  /// when the detail fetch fails before any other title source (cache,
+  /// library entry) is available.
+  final String? placeholderTitle;
+
   @override
-  List<Object?> get props => [sourceId, url, bookId];
+  List<Object?> get props => [sourceId, url, bookId, placeholderTitle];
 }
 
 class DetailReloaded extends DetailEvent {

@@ -30,6 +30,7 @@ import 'provider/provider_manager.dart';
 import 'repository/tracker_repository.dart';
 import 'repository/summaries_repository.dart';
 import 'repository/voices_repository.dart';
+import 'services/directory_service.dart';
 import 'security/app_lock_cubit.dart';
 import 'services/changelog_service.dart';
 import 'package:audio_service/audio_service.dart';
@@ -86,6 +87,10 @@ class AppBootstrap {
     await ProviderSettingsRepository.init();
     await TrackerRepository.init();
     await VoicesRepository.init();
+    // Directory cache box. The DirectoryService is registered lazily
+    // in configureDependencies; we just need the box open by then so
+    // the first read after first paint is synchronous.
+    await DirectoryService.init();
     // AI summary cache + register the repo as a singleton. Done here
     // (not in configureDependencies) because the Hive box has to be
     // opened asynchronously before the repo can be constructed.
@@ -156,9 +161,14 @@ class AppBootstrap {
         debugPrint('[bootstrap] reassociateBundled failed: $e');
       }
     }();
-    // Note: we do NOT call loadAll() here — that would try to download
-    // providers from the placeholder GitHub URL and waste time. In dev,
-    // main.dart calls loadBundledProviders() instead.
+    // Provider runtime population happens AFTER bootstrap returns:
+    //   * main.dart calls `loadBundledProviders([...])` for the asset
+    //     JS files we ship in `providers/`.
+    //   * main.dart then fires `ProviderRegistry.loadAll()` to re-
+    //     inject every repo-installed provider's cached JS into the
+    //     QuickJS runtime. `force: false` serves from the
+    //     ProviderDownloader Hive cache so this is offline-safe and
+    //     finishes in ~10-50 ms per provider.
 
     // Start the library sync engine. If the user is signed in this kicks
     // off a background pull from Supabase and wires up the local-write

@@ -59,6 +59,10 @@ class DetailBloc extends Bloc<DetailEvent, DetailState> {
   String? _sourceId;
   String? _url;
   String? _bookId;
+  // Placeholder title from the source card. Last-resort title source
+  // for the auto-switch fallback when detail fetch fails before
+  // anything else (cache / library) has a chance to provide one.
+  String? _placeholderTitle;
 
   @override
   Future<void> close() async {
@@ -70,6 +74,7 @@ class DetailBloc extends Bloc<DetailEvent, DetailState> {
     _sourceId = event.sourceId;
     _url = event.url;
     _bookId = event.bookId;
+    _placeholderTitle = event.placeholderTitle;
     await _fetch(emit);
   }
 
@@ -253,6 +258,12 @@ class DetailBloc extends Bloc<DetailEvent, DetailState> {
     if (state.book?.title.isNotEmpty == true) return state.book!.title;
     final entry = _library.get(sourceId, bookId);
     if (entry?.book.title.isNotEmpty == true) return entry!.book.title;
+    // Last resort: the placeholder title threaded through by
+    // DetailScreen from the source card / search row. Covers the
+    // common "tap a search result, detail fetch fails" path where
+    // neither cache nor library has anything.
+    final ph = _placeholderTitle?.trim();
+    if (ph != null && ph.isNotEmpty) return ph;
     return null;
   }
 
