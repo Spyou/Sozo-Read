@@ -59,7 +59,15 @@ class ProviderDownloader {
     try {
       final resp = await _dio.getUri<String>(
         Uri.parse(url),
-        options: Options(responseType: ResponseType.plain, validateStatus: (s) => s != null && s < 500),
+        options: Options(
+          responseType: ResponseType.plain,
+          validateStatus: (s) => s != null && s < 500,
+          // raw.githubusercontent.com sits behind Fastly with a ~5 min
+          // edge cache. Without this header, "force: true" still got us
+          // stale JS — Fastly served the previous version even after a
+          // fresh push. Same fix the directory service uses.
+          headers: force ? {'Cache-Control': 'no-cache'} : null,
+        ),
       );
       if (resp.statusCode == null || resp.statusCode! >= 400) {
         if (cached != null) return cached;

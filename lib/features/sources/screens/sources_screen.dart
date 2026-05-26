@@ -34,7 +34,19 @@ class SourcesScreen extends StatelessWidget {
         repository: sl<ProviderRepository>(),
         remoteHealth: sl<RemoteHealthService>(),
       )..add(const SourcesStarted()),
-      child: const _SourcesView(),
+      child: BlocListener<SourcesBloc, SourcesState>(
+        // Surface transient update / install messages as snackbars.
+        // noticeSeq disambiguates identical messages (e.g. two "Already
+        // up to date" taps in a row) so the listener fires both times.
+        listenWhen: (prev, next) =>
+            next.notice != null && next.noticeSeq != prev.noticeSeq,
+        listener: (ctx, state) {
+          ScaffoldMessenger.of(ctx).showAppSnack(
+            SnackBar(content: Text(state.notice!)),
+          );
+        },
+        child: const _SourcesView(),
+      ),
     );
   }
 }

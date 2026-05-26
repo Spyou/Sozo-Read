@@ -104,11 +104,19 @@ class SourcesState extends Equatable {
   final SourcesStatus status;
   final List<SourceItem> items;
   final String? error;
+  /// Transient user-facing notice (e.g. "Updated X to v1.0.3"). Paired
+  /// with [noticeSeq] so the UI's BlocListener can detect repeats — two
+  /// identical messages still need to fire two snackbars, which would
+  /// otherwise be deduped by Equatable.
+  final String? notice;
+  final int noticeSeq;
 
   const SourcesState({
     this.status = SourcesStatus.initial,
     this.items = const [],
     this.error,
+    this.notice,
+    this.noticeSeq = 0,
   });
 
   SourcesState copyWith({
@@ -116,13 +124,17 @@ class SourcesState extends Equatable {
     List<SourceItem>? items,
     String? error,
     bool clearError = false,
+    String? notice,
+    int? noticeSeq,
   }) =>
       SourcesState(
         status: status ?? this.status,
         items: items ?? this.items,
         error: clearError ? null : (error ?? this.error),
+        notice: notice ?? this.notice,
+        noticeSeq: noticeSeq ?? this.noticeSeq,
       );
 
   @override
-  List<Object?> get props => [status, items, error];
+  List<Object?> get props => [status, items, error, notice, noticeSeq];
 }

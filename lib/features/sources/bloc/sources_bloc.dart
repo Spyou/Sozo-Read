@@ -142,8 +142,44 @@ class SourcesBloc extends Bloc<SourcesEvent, SourcesState> {
   }
 
   Future<void> _onUpdated(SourceUpdated event, Emitter<SourcesState> emit) async {
-    await _repo.refresh(event.name, repoUrl: event.repoUrl);
+    // Snapshot the displayed version + name BEFORE the refresh so we
+    // can tell the user whether the update actually changed anything.
+    final before = _findItem(event.name);
+    final beforeVersion = before?.info?.version;
+    final displayName = before?.info?.name ?? event.name;
+
+    final result = await _repo.refresh(event.name, repoUrl: event.repoUrl);
     await _load(emit);
+    result.fold(
+      (f) {
+        emit(state.copyWith(
+          notice: 'Update failed: ${f.message}',
+          noticeSeq: state.noticeSeq + 1,
+        ));
+      },
+      (_) {
+        final afterVersion = _findItem(event.name)?.info?.version;
+        final changed = beforeVersion != null &&
+            afterVersion != null &&
+            beforeVersion != afterVersion;
+        final msg = changed
+            ? 'Updated $displayName to v$afterVersion'
+            : afterVersion != null
+                ? '$displayName is up to date (v$afterVersion)'
+                : '$displayName reloaded';
+        emit(state.copyWith(
+          notice: msg,
+          noticeSeq: state.noticeSeq + 1,
+        ));
+      },
+    );
+  }
+
+  SourceItem? _findItem(String name) {
+    for (final s in state.items) {
+      if (s.name == name) return s;
+    }
+    return null;
   }
 
   Future<void> _onHealthReset(
