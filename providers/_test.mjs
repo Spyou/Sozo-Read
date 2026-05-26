@@ -1,6 +1,5 @@
 // Node test harness for JS providers.
 // Usage:
-//   node providers/_test.mjs mangadex "one piece"
 //   node providers/_test.mjs mangakakalot "one piece"
 //
 // Replicates the Dart bootstrap (htmlText/absUrl + console). Node 18+ has fetch.
@@ -11,7 +10,7 @@ import url from 'node:url';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 
-const provider = process.argv[2] || 'mangadex';
+const provider = process.argv[2] || 'mangakakalot';
 const query = process.argv[3] || 'one piece';
 
 // --- minimal bootstrap (mirrors js_bootstrap.dart) -------------------------

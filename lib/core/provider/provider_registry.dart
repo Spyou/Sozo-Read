@@ -134,12 +134,6 @@ class ProviderRegistry {
   /// Built-in (default) providers shipped with the app. The user can also add custom URLs.
   List<ProviderRegistryEntry> get builtIns => [
         ProviderRegistryEntry(
-          name: 'mangadex',
-          url: '${_registryBase}mangadex.js',
-          originRepoUrl: kBuiltinRepoUrl,
-          displayName: 'Built-in',
-        ),
-        ProviderRegistryEntry(
           name: 'mangakakalot',
           url: '${_registryBase}mangakakalot.js',
           originRepoUrl: kBuiltinRepoUrl,

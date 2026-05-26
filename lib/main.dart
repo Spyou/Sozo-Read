@@ -39,9 +39,8 @@ void main() async {
   // first run works without a configured GitHub registry.
   // Manga: weebcentral, mangapill, mangakatana — full chapter pages.
   // Novel: freewebnovel, novelbin — server-side HTML, no CF gate.
-  // mangadex.js and mangakakalot.js are still shipped as assets but not
-  // auto-loaded (mangakakalot caps at 6 SSR pages; mangadex's popular feed
-  // is dominated by licensed manhwa with no images).
+  // mangakakalot.js is still shipped as an asset but not auto-loaded
+  // (caps at 6 SSR pages so it's a poor default).
   await loadBundledProviders([
     'weebcentral',
     'mangapill',

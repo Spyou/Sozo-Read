@@ -147,16 +147,138 @@ class _InstalledTab extends StatelessWidget {
             icon: Icons.extension_outlined,
           );
         }
-        return ListView.separated(
+        // Group sources by their origin repo so users can collapse the
+        // ones they don't care about right now. The same source could
+        // exist in multiple repos via composite keys; each repo gets
+        // its own header.
+        final groups = <String, List<SourceItem>>{};
+        final repoNames = <String, String>{};
+        for (final s in state.items) {
+          final key = s.repoUrl.isEmpty ? '__bundled__' : s.repoUrl;
+          groups.putIfAbsent(key, () => <SourceItem>[]).add(s);
+          // Pick the most descriptive name we've seen for this repo.
+          final existing = repoNames[key] ?? '';
+          final candidate = s.repoDisplayName.isNotEmpty
+              ? s.repoDisplayName
+              : (s.repoUrl.isEmpty ? 'Bundled' : s.repoUrl);
+          if (candidate.length > existing.length) {
+            repoNames[key] = candidate;
+          }
+        }
+        final keys = groups.keys.toList()
+          ..sort((a, b) {
+            // Bundled first, then repos alphabetically by display name.
+            if (a == '__bundled__') return -1;
+            if (b == '__bundled__') return 1;
+            return (repoNames[a] ?? a)
+                .toLowerCase()
+                .compareTo((repoNames[b] ?? b).toLowerCase());
+          });
+        return ListView.builder(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
-          itemCount: state.items.length,
-          separatorBuilder: (_, _) => const SizedBox(height: 8),
+          itemCount: keys.length,
           itemBuilder: (_, i) {
-            final s = state.items[i];
-            return _SourceTile(item: s);
+            final key = keys[i];
+            final items = groups[key]!
+              ..sort((a, b) => (a.info?.name ?? a.name)
+                  .toLowerCase()
+                  .compareTo((b.info?.name ?? b.name).toLowerCase()));
+            return _RepoGroup(
+              name: repoNames[key] ?? key,
+              repoUrl: key == '__bundled__' ? '' : key,
+              items: items,
+            );
           },
         );
       },
+    );
+  }
+}
+
+/// Collapsible card grouping every source from one repo. Default
+/// expanded so the user sees their providers without clicking — they
+/// can fold groups they don't currently care about.
+class _RepoGroup extends StatelessWidget {
+  const _RepoGroup({
+    required this.name,
+    required this.repoUrl,
+    required this.items,
+  });
+
+  final String name;
+  final String repoUrl;
+  final List<SourceItem> items;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppColors.divider.withValues(alpha: 0.5),
+          width: 0.6,
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        // ExpansionTile splatters its own divider across the bottom of
+        // the header. Suppress it so we can use our own separators.
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          initiallyExpanded: true,
+          tilePadding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+          childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+          leading: const Icon(
+            Icons.folder_outlined,
+            color: AppColors.textSecondary,
+            size: 20,
+          ),
+          title: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 2,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.card.withValues(alpha: 0.7),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '${items.length}',
+                  style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          children: [
+            for (var i = 0; i < items.length; i++) ...[
+              if (i > 0) const SizedBox(height: 8),
+              _SourceTile(item: items[i]),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

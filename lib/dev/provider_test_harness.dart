@@ -49,7 +49,7 @@ class _HarnessScreenState extends State<_HarnessScreen> {
   late final ProviderManager _manager = ProviderManager(dio: _dio);
 
   final _queryCtrl = TextEditingController(text: 'one piece');
-  String _provider = 'mangadex';
+  String _provider = 'mangakakalot';
   String _output = '(idle)';
   bool _busy = false;
 
@@ -131,10 +131,10 @@ class _HarnessScreenState extends State<_HarnessScreen> {
                     initialValue: _provider,
                     decoration: const InputDecoration(labelText: 'Provider'),
                     items: const [
-                      DropdownMenuItem(value: 'mangadex', child: Text('MangaDex')),
                       DropdownMenuItem(value: 'mangakakalot', child: Text('Mangakakalot')),
                     ],
-                    onChanged: (v) => setState(() => _provider = v ?? 'mangadex'),
+                    onChanged: (v) =>
+                        setState(() => _provider = v ?? 'mangakakalot'),
                   ),
                 ),
                 const SizedBox(width: 12),

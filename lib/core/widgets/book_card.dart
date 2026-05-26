@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:shimmer/shimmer.dart';
 
+import '../di/injection.dart';
 import '../models/book_item.dart';
 import '../state/novel_prefs_cubit.dart';
 import '../theme/app_colors.dart';
@@ -80,13 +81,19 @@ class BookCard extends StatelessWidget {
             // the cover. Long titles otherwise overflow the card by
             // ~10 px when the parent's height constraint is tight.
             //
-            // BlocBuilder reactively picks english / original / both
-            // based on user prefs. Existing `subtitle` parameter (used
-            // by callers for source labels) wins over the mode-derived
-            // subtitle so source labels stay visible regardless of
-            // title mode.
+            // BlocBuilder takes the cubit EXPLICITLY via `bloc:` (not
+            // looked up from the widget tree) because BookCard is
+            // used in surfaces that don't always wrap it in a
+            // BlocProvider — chapter-check notification rendering,
+            // deep-linked previews, etc. The cubit is a DI singleton
+            // so reading it via `sl<>` works from anywhere.
+            //
+            // Existing `subtitle` parameter (used by callers for
+            // source labels) wins over the mode-derived subtitle so
+            // source labels stay visible regardless of title mode.
             Flexible(
               child: BlocBuilder<NovelPrefsCubit, NovelPrefs>(
+                bloc: sl<NovelPrefsCubit>(),
                 buildWhen: (a, b) =>
                     a.titleDisplayMode != b.titleDisplayMode,
                 builder: (_, prefs) {

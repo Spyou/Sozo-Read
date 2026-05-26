@@ -28,6 +28,12 @@ class DevelopersSettingsScreen extends StatelessWidget {
       description: 'Web developer',
       github: 'flowstrike',
     ),
+    _Developer(
+      name: 'Noman',
+      role: 'Provider developer',
+      description: 'Community source maintainer · ManhuaScrap',
+      github: 'Nomaan788',
+    ),
   ];
 
   @override
@@ -280,3 +286,4 @@ class _LinkRow extends StatelessWidget {
     );
   }
 }
+

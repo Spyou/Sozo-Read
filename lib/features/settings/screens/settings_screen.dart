@@ -153,6 +153,11 @@ class _SettingsView extends StatelessWidget {
                 onTap: () => context.push('/settings/developers'),
               ),
               SettingsTile(
+                icon: Icons.favorite_outline_rounded,
+                title: 'Credits',
+                onTap: () => context.push('/settings/credits'),
+              ),
+              SettingsTile(
                 icon: Icons.info_outline,
                 title: 'About',
                 subtitle: 'v1.0.0',

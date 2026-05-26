@@ -21,6 +21,7 @@ import '../../features/search/screens/search_screen.dart';
 import '../../features/settings/screens/about_settings_screen.dart';
 import '../../features/settings/screens/appearance_settings_screen.dart';
 import '../../features/settings/screens/changelog_screen.dart';
+import '../../features/settings/screens/credits_settings_screen.dart';
 import '../../features/settings/screens/developers_settings_screen.dart';
 import '../../features/settings/screens/neural_voices_screen.dart';
 import '../../features/settings/screens/reading_settings_screen.dart';
@@ -251,6 +252,11 @@ GoRouter buildRouter() {
         path: '/settings/developers',
         name: 'settings-developers',
         builder: (_, _) => const DevelopersSettingsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/credits',
+        name: 'settings-credits',
+        builder: (_, _) => const CreditsSettingsScreen(),
       ),
       GoRoute(
         path: '/settings/about',

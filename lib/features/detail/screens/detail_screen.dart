@@ -559,6 +559,7 @@ class _DetailBodyState extends State<_DetailBody> with SingleTickerProviderState
             duration: const Duration(milliseconds: 180),
             curve: Curves.easeOut,
             child: BlocBuilder<NovelPrefsCubit, NovelPrefs>(
+              bloc: sl<NovelPrefsCubit>(),
               buildWhen: (a, b) =>
                   a.titleDisplayMode != b.titleDisplayMode,
               builder: (_, prefs) => Text(
@@ -1538,7 +1539,13 @@ class _BackdropHeader extends StatelessWidget {
                       // on which side primary picked) renders below as
                       // a smaller subtitle so the user sees both
                       // without ellipsing.
+                      //
+                      // Bloc passed explicitly via `bloc:` because the
+                      // detail route doesn't wrap itself in a
+                      // NovelPrefsCubit provider — the cubit is a DI
+                      // singleton so this works from anywhere.
                       BlocBuilder<NovelPrefsCubit, NovelPrefs>(
+                        bloc: sl<NovelPrefsCubit>(),
                         buildWhen: (a, b) =>
                             a.titleDisplayMode != b.titleDisplayMode,
                         builder: (_, prefs) {

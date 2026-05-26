@@ -192,7 +192,6 @@ flutter:
   uses-material-design: true
   assets:
     - .env
-    - providers/mangadex.js
     - providers/mangakakalot.js
     - providers/weebcentral.js
     - providers/mangapill.js

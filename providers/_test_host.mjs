@@ -65,14 +65,12 @@ function wrap(sourceId, src) {
 
 eval(bootstrap);
 
-const mdSrc = fs.readFileSync(path.join(__dirname, 'mangadex.js'), 'utf8');
 const mkSrc = fs.readFileSync(path.join(__dirname, 'mangakakalot.js'), 'utf8');
-eval(wrap('mangadex', mdSrc));
 eval(wrap('mangakakalot', mkSrc));
 
 console.log('\nLoaded providers:', Object.keys(globalThis.__providers));
 
-for (const sid of ['mangadex', 'mangakakalot']) {
+for (const sid of ['mangakakalot']) {
   console.log(`\n=== ${sid} ===`);
   const infoJson = await globalThis.__callProvider(sid, 'getInfo', '[]');
   console.log('getInfo:', JSON.parse(infoJson).name);
