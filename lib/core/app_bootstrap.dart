@@ -31,6 +31,7 @@ import 'repository/tracker_repository.dart';
 import 'repository/summaries_repository.dart';
 import 'repository/voices_repository.dart';
 import 'services/directory_service.dart';
+import 'services/remote_health_service.dart';
 import 'security/app_lock_cubit.dart';
 import 'services/changelog_service.dart';
 import 'package:audio_service/audio_service.dart';
@@ -91,6 +92,9 @@ class AppBootstrap {
     // in configureDependencies; we just need the box open by then so
     // the first read after first paint is synchronous.
     await DirectoryService.init();
+    // Remote provider health cache (status.json from sozoread-providers).
+    // The service itself is registered lazily in configureDependencies.
+    await RemoteHealthService.init();
     // AI summary cache + register the repo as a singleton. Done here
     // (not in configureDependencies) because the Hive box has to be
     // opened asynchronously before the repo can be constructed.

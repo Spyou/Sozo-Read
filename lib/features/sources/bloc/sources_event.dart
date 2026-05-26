@@ -1,5 +1,7 @@
 import 'package:equatable/equatable.dart';
 
+import '../../../core/services/remote_health_service.dart';
+
 abstract class SourcesEvent extends Equatable {
   const SourcesEvent();
   @override
@@ -50,4 +52,15 @@ class SourceHealthReset extends SourcesEvent {
   final String name;
   @override
   List<Object?> get props => [name];
+}
+
+/// Internal event: the background remote-health fetch finished and has
+/// the freshest map. Dispatched by the bloc itself, not the UI. Carries
+/// the full map keyed by sourceId so the handler can rebuild items in
+/// one pass.
+class SourcesRemoteHealthArrived extends SourcesEvent {
+  const SourcesRemoteHealthArrived(this.entries);
+  final Map<String, RemoteHealthEntry> entries;
+  @override
+  List<Object?> get props => [entries];
 }

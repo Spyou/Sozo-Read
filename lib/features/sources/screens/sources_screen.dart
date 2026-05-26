@@ -14,6 +14,7 @@ import '../../../core/provider/provider_registry.dart';
 import '../../../core/provider/provider_repo_registry.dart';
 import '../../../core/repository/provider_repository.dart';
 import '../../../core/services/directory_service.dart';
+import '../../../core/services/remote_health_service.dart';
 import '../../../core/state/source_filter_cubit.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/app_snack.dart';
@@ -31,6 +32,7 @@ class SourcesScreen extends StatelessWidget {
       create: (_) => SourcesBloc(
         registry: sl<ProviderRegistry>(),
         repository: sl<ProviderRepository>(),
+        remoteHealth: sl<RemoteHealthService>(),
       )..add(const SourcesStarted()),
       child: const _SourcesView(),
     );
@@ -289,13 +291,13 @@ class _SourceTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final subtitle = item.error != null
-        ? item.error!
-        : item.info != null
-            ? '${item.info!.lang} • ${item.info!.type.name} • v${item.info!.version ?? '?'}'
-            : item.loaded
-                ? 'loaded'
-                : 'not loaded';
+    final effective = item.effectiveHealth;
+    final remote = item.remoteHealth;
+    final subtitle = _subtitleFor(item);
+    final subtitleColor = (item.error != null ||
+            effective == ProviderHealthStatus.broken)
+        ? AppColors.error
+        : AppColors.textSecondary;
     return Container(
       decoration: BoxDecoration(
         color: AppColors.card,
@@ -310,22 +312,35 @@ class _SourceTile extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+            // Local health drives the primary pill — that's what the
+            // user's last call to the source actually returned.
             if (item.health != ProviderHealthStatus.healthy) ...[
               const SizedBox(width: 8),
               _HealthPill(status: item.health),
             ],
+            // When CI flagged the source but local is still clean, hint
+            // separately so the user knows CI has seen trouble even if
+            // their own usage looks fine right now.
+            if (item.health == ProviderHealthStatus.healthy &&
+                remote != null &&
+                remote.isProblem) ...[
+              const SizedBox(width: 8),
+              const _CiFlaggedPill(),
+            ],
+            // Cheap "slow" hint when CI consistently sees high latency —
+            // not an error, just useful context.
+            if (item.health == ProviderHealthStatus.healthy &&
+                remote != null &&
+                remote.status == RemoteProviderStatus.slow) ...[
+              const SizedBox(width: 8),
+              const _SlowPill(),
+            ],
           ],
         ),
         subtitle: Text(
-          item.health != ProviderHealthStatus.healthy &&
-                  item.healthError != null
-              ? item.healthError!
-              : subtitle,
+          subtitle,
           style: TextStyle(
-            color: (item.error != null ||
-                    item.health == ProviderHealthStatus.broken)
-                ? AppColors.error
-                : AppColors.textSecondary,
+            color: subtitleColor,
             fontSize: 12,
           ),
           maxLines: 2,
@@ -395,6 +410,40 @@ class _HealthPill extends StatelessWidget {
     final isBroken = status == ProviderHealthStatus.broken;
     final color = isBroken ? AppColors.error : Colors.amber;
     final label = isBroken ? 'BROKEN' : 'DEGRADED';
+    return _PillChrome(color: color, label: label);
+  }
+}
+
+/// Pill shown when CI reports a problem but local usage is still fine.
+/// Quieter color than `BROKEN` because the user hasn't hit the failure
+/// yet — informational, not alarming.
+class _CiFlaggedPill extends StatelessWidget {
+  const _CiFlaggedPill();
+
+  @override
+  Widget build(BuildContext context) {
+    return const _PillChrome(color: Colors.orange, label: 'CI');
+  }
+}
+
+/// Pill shown when CI consistently sees slow responses from a source.
+/// Not an error — works, just sluggish.
+class _SlowPill extends StatelessWidget {
+  const _SlowPill();
+
+  @override
+  Widget build(BuildContext context) {
+    return _PillChrome(color: Colors.blueGrey.shade300, label: 'SLOW');
+  }
+}
+
+class _PillChrome extends StatelessWidget {
+  const _PillChrome({required this.color, required this.label});
+  final Color color;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
@@ -413,6 +462,38 @@ class _HealthPill extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Builds the second-line text for one source tile.
+///
+/// Priority of signals (most relevant first):
+/// 1. A locally-seen error (most recent + most user-relevant)
+/// 2. A CI-reported problem (broken-parse, etc.)
+/// 3. The default metadata line (lang • type • version)
+String _subtitleFor(SourceItem item) {
+  if (item.error != null) return item.error!;
+  if (item.health != ProviderHealthStatus.healthy &&
+      item.healthError != null) {
+    return item.healthError!;
+  }
+  final remote = item.remoteHealth;
+  if (remote != null) {
+    if (remote.isProblem) {
+      final detail = remote.error ?? remote.shortLabel;
+      return 'CI: $detail';
+    }
+    if (remote.status == RemoteProviderStatus.slow && remote.latencyMs != null) {
+      final seconds = (remote.latencyMs! / 1000).toStringAsFixed(1);
+      final base = item.info != null
+          ? '${item.info!.lang} • ${item.info!.type.name} • v${item.info!.version ?? '?'}'
+          : (item.loaded ? 'loaded' : 'not loaded');
+      return '$base • slow (~${seconds}s)';
+    }
+  }
+  if (item.info != null) {
+    return '${item.info!.lang} • ${item.info!.type.name} • v${item.info!.version ?? '?'}';
+  }
+  return item.loaded ? 'loaded' : 'not loaded';
 }
 
 // ---------------------------------------------------------------------------

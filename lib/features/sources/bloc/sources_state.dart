@@ -2,6 +2,7 @@ import 'package:equatable/equatable.dart';
 
 import '../../../core/models/provider_info.dart';
 import '../../../core/provider/provider_manager.dart';
+import '../../../core/services/remote_health_service.dart';
 
 class SourceItem extends Equatable {
   final String name;
@@ -13,6 +14,10 @@ class SourceItem extends Equatable {
   final String? healthError;
   final String repoUrl;
   final String repoDisplayName;
+  /// CI-reported health for this source, if the providers repo has a
+  /// status.json entry for it. Null when remote health hasn't loaded or
+  /// the source isn't in the manifest.
+  final RemoteHealthEntry? remoteHealth;
 
   const SourceItem({
     required this.name,
@@ -24,6 +29,7 @@ class SourceItem extends Equatable {
     this.healthError,
     this.repoUrl = '',
     this.repoDisplayName = '',
+    this.remoteHealth,
   });
 
   SourceItem copyWith({
@@ -35,6 +41,8 @@ class SourceItem extends Equatable {
     String? healthError,
     String? repoUrl,
     String? repoDisplayName,
+    RemoteHealthEntry? remoteHealth,
+    bool clearRemoteHealth = false,
   }) =>
       SourceItem(
         name: name,
@@ -46,11 +54,48 @@ class SourceItem extends Equatable {
         healthError: healthError ?? this.healthError,
         repoUrl: repoUrl ?? this.repoUrl,
         repoDisplayName: repoDisplayName ?? this.repoDisplayName,
+        remoteHealth:
+            clearRemoteHealth ? null : (remoteHealth ?? this.remoteHealth),
       );
 
+  /// Worst-of merge between local + remote. Local takes priority when it
+  /// reports trouble — the user is hitting real failures, that's more
+  /// recent than the last CI run. When local is clean, defer to the
+  /// remote signal (CI noticed something the user hasn't bumped into yet).
+  /// `blocked-ci` is treated as no-signal, since it doesn't reflect real
+  /// user conditions.
+  ProviderHealthStatus get effectiveHealth {
+    if (health != ProviderHealthStatus.healthy) return health;
+    final r = remoteHealth;
+    if (r == null) return health;
+    switch (r.status) {
+      case RemoteProviderStatus.brokenParse:
+      case RemoteProviderStatus.brokenHttp:
+      case RemoteProviderStatus.timeout:
+        return ProviderHealthStatus.broken;
+      case RemoteProviderStatus.degraded:
+        return ProviderHealthStatus.degraded;
+      case RemoteProviderStatus.ok:
+      case RemoteProviderStatus.slow:
+      case RemoteProviderStatus.blockedCi:
+      case RemoteProviderStatus.unknown:
+        return ProviderHealthStatus.healthy;
+    }
+  }
+
   @override
-  List<Object?> get props =>
-      [name, url, loaded, info, error, health, healthError, repoUrl, repoDisplayName];
+  List<Object?> get props => [
+        name,
+        url,
+        loaded,
+        info,
+        error,
+        health,
+        healthError,
+        repoUrl,
+        repoDisplayName,
+        remoteHealth?.toJson(),
+      ];
 }
 
 enum SourcesStatus { initial, loading, ready }

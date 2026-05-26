@@ -6,6 +6,7 @@ import 'package:hive/hive.dart';
 import '../../../core/provider/provider_manager.dart';
 import '../../../core/provider/provider_registry.dart';
 import '../../../core/repository/provider_repository.dart';
+import '../../../core/services/remote_health_service.dart';
 import 'sources_event.dart';
 import 'sources_state.dart';
 
@@ -13,8 +14,10 @@ class SourcesBloc extends Bloc<SourcesEvent, SourcesState> {
   SourcesBloc({
     required ProviderRegistry registry,
     required ProviderRepository repository,
+    required RemoteHealthService remoteHealth,
   })  : _registry = registry,
         _repo = repository,
+        _remoteHealth = remoteHealth,
         super(const SourcesState()) {
     on<SourcesStarted>(_onStarted);
     on<SourcesRefreshed>(_onRefreshed);
@@ -22,6 +25,7 @@ class SourcesBloc extends Bloc<SourcesEvent, SourcesState> {
     on<SourceUninstalled>(_onUninstalled);
     on<SourceUpdated>(_onUpdated);
     on<SourceHealthReset>(_onHealthReset);
+    on<SourcesRemoteHealthArrived>(_onRemoteHealthArrived);
     // Subscribe to the providers Hive box so the Installed tab refreshes
     // automatically when ANY caller changes the registry — including the
     // Repos tab's per-source install/uninstall buttons that call the
@@ -35,6 +39,7 @@ class SourcesBloc extends Bloc<SourcesEvent, SourcesState> {
 
   final ProviderRegistry _registry;
   final ProviderRepository _repo;
+  final RemoteHealthService _remoteHealth;
   StreamSubscription<BoxEvent>? _boxSub;
 
   @override
@@ -49,6 +54,11 @@ class SourcesBloc extends Bloc<SourcesEvent, SourcesState> {
   Future<void> _load(Emitter<SourcesState> emit) async {
     emit(state.copyWith(status: SourcesStatus.loading, clearError: true));
     final entries = _registry.getInstalled();
+
+    // Pull cached remote health synchronously for first paint. Background
+    // refresh fires below; UI updates again when it lands.
+    final cachedHealth = _remoteHealth.cached();
+
     final items = <SourceItem>[];
     for (final e in entries) {
       // Runtime is keyed by sourceId only — at most one (repoUrl,
@@ -66,6 +76,7 @@ class SourcesBloc extends Bloc<SourcesEvent, SourcesState> {
         healthError: provider?.lastError,
         repoUrl: e.originRepoUrl,
         repoDisplayName: e.displayName,
+        remoteHealth: cachedHealth[e.name],
       );
       if (loaded) {
         final info = await _repo.info(e.name);
@@ -82,6 +93,33 @@ class SourcesBloc extends Bloc<SourcesEvent, SourcesState> {
       items.add(item);
     }
     emit(state.copyWith(status: SourcesStatus.ready, items: items));
+
+    // Background refresh — fire-and-forget. If the cache was already
+    // fresh this is a no-op; otherwise we re-emit with the new data.
+    unawaited(_refreshRemoteHealth());
+  }
+
+  Future<void> _refreshRemoteHealth() async {
+    try {
+      final fresh = await _remoteHealth.getOrRefresh();
+      if (isClosed) return;
+      add(SourcesRemoteHealthArrived(fresh));
+    } catch (_) {
+      // Network down / parse error — keep showing the cached map.
+    }
+  }
+
+  Future<void> _onRemoteHealthArrived(
+    SourcesRemoteHealthArrived event,
+    Emitter<SourcesState> emit,
+  ) async {
+    final updated = state.items
+        .map((s) => s.copyWith(
+              remoteHealth: event.entries[s.name],
+              clearRemoteHealth: event.entries[s.name] == null,
+            ))
+        .toList();
+    emit(state.copyWith(items: updated));
   }
 
   Future<void> _onInstalled(SourceInstalled event, Emitter<SourcesState> emit) async {

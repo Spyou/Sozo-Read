@@ -32,6 +32,7 @@ import '../services/ai/gemini_ai_client.dart';
 import '../services/apk_installer.dart';
 import '../services/changelog_service.dart';
 import '../services/directory_service.dart';
+import '../services/remote_health_service.dart';
 import '../services/chapter_check_service.dart';
 import '../services/cross_source_matcher.dart';
 import '../services/download_notification_service.dart';
@@ -200,6 +201,16 @@ Future<void> configureDependencies({AppLockCubit? appLock}) async {
       url: dotenv.maybeGet('DIRECTORY_URL')?.trim().isNotEmpty == true
           ? dotenv.get('DIRECTORY_URL').trim()
           : 'https://raw.githubusercontent.com/Spyou/sozoread-directory/main/index.json',
+    ),
+  );
+  // Remote provider health (CI-published status.json in sozoread-providers).
+  // Read-only consumer; the workflow in that repo writes the file.
+  sl.registerLazySingleton<RemoteHealthService>(
+    () => RemoteHealthService(
+      dio: sl(),
+      url: dotenv.maybeGet('PROVIDER_HEALTH_URL')?.trim().isNotEmpty == true
+          ? dotenv.get('PROVIDER_HEALTH_URL').trim()
+          : 'https://raw.githubusercontent.com/Spyou/sozoread-providers/main/status.json',
     ),
   );
   // Persistent download-progress notification. Subscribes to the
