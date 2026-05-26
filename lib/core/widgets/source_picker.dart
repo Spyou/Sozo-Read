@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
@@ -10,6 +12,7 @@ import '../provider/provider_registry.dart';
 import '../provider/provider_repo_registry.dart';
 import '../repository/provider_repository.dart';
 import '../state/active_source_cubit.dart';
+import '../state/pinned_sources_prefs.dart';
 import '../theme/app_colors.dart';
 
 /// Two-tab source picker (All / Manga / Novel). Sources are grouped by
@@ -81,6 +84,31 @@ class _SourcePickerSheet extends StatefulWidget {
 
 class _SourcePickerSheetState extends State<_SourcePickerSheet> {
   late final Future<List<_TypedSource>> _future = _resolve();
+  late final PinnedSourcesPrefs _pinned = sl<PinnedSourcesPrefs>();
+  late final StreamSubscription _pinSub;
+  late final TextEditingController _searchCtl = TextEditingController();
+  String _query = '';
+
+  /// Threshold above which the search box appears. Below this the
+  /// picker fits comfortably on one screen and search is just chrome.
+  static const int _searchThreshold = 10;
+
+  @override
+  void initState() {
+    super.initState();
+    // Re-render when the pinned set changes from anywhere (long-press,
+    // settings screen later, etc.).
+    _pinSub = _pinned.watch().listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _pinSub.cancel();
+    _searchCtl.dispose();
+    super.dispose();
+  }
 
   /// Resolves installed registry entries + their cached [ProviderInfo]
   /// (loaded providers only). Entries whose JS is not currently in the
@@ -160,6 +188,22 @@ class _SourcePickerSheetState extends State<_SourcePickerSheet> {
     }
   }
 
+  Future<void> _togglePin(_TypedSource s) async {
+    final wasPinned = _pinned.isPinned(s.providerKey);
+    await _pinned.toggle(s.providerKey);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showAppSnack(
+      SnackBar(
+        content: Text(
+          wasPinned
+              ? 'Unpinned ${s.info.name.isEmpty ? s.sourceId : s.info.name}'
+              : 'Pinned ${s.info.name.isEmpty ? s.sourceId : s.info.name}',
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   /// Short label for repos whose entry has no snapshotted displayName
   /// — derived from the URL host so the subtitle is still informative.
   String _shortRepoLabel(String repoUrl) {
@@ -233,22 +277,48 @@ class _SourcePickerSheetState extends State<_SourcePickerSheet> {
                     final novel = all.where((s) =>
                         s.info.type == ProviderType.novel ||
                         s.info.type == ProviderType.both).toList();
-                    return TabBarView(
+                    final showSearch = all.length >= _searchThreshold;
+                    final pinnedSet = _pinned.all();
+                    return Column(
                       children: [
-                        _GroupedSourceList(
-                          sources: all,
-                          emptyLabel: 'No sources installed.',
-                          activeKey: widget.activeKey,
-                        ),
-                        _GroupedSourceList(
-                          sources: manga,
-                          emptyLabel: 'No manga sources installed.',
-                          activeKey: widget.activeKey,
-                        ),
-                        _GroupedSourceList(
-                          sources: novel,
-                          emptyLabel: 'No novel sources installed.',
-                          activeKey: widget.activeKey,
+                        if (showSearch)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                            child: _SearchField(
+                              controller: _searchCtl,
+                              onChanged: (v) =>
+                                  setState(() => _query = v.trim()),
+                            ),
+                          ),
+                        Expanded(
+                          child: TabBarView(
+                            children: [
+                              _SourceList(
+                                sources: all,
+                                pinnedKeys: pinnedSet,
+                                query: _query,
+                                emptyLabel: 'No sources installed.',
+                                activeKey: widget.activeKey,
+                                onTogglePin: _togglePin,
+                              ),
+                              _SourceList(
+                                sources: manga,
+                                pinnedKeys: pinnedSet,
+                                query: _query,
+                                emptyLabel: 'No manga sources installed.',
+                                activeKey: widget.activeKey,
+                                onTogglePin: _togglePin,
+                              ),
+                              _SourceList(
+                                sources: novel,
+                                pinnedKeys: pinnedSet,
+                                query: _query,
+                                emptyLabel: 'No novel sources installed.',
+                                activeKey: widget.activeKey,
+                                onTogglePin: _togglePin,
+                              ),
+                            ],
+                          ),
                         ),
                       ],
                     );
@@ -263,36 +333,91 @@ class _SourcePickerSheetState extends State<_SourcePickerSheet> {
   }
 }
 
-/// Renders sources grouped by repoUrl. Spyou's default repo (whatever
-/// `DEFAULT_PROVIDER_REPO` points at) starts expanded; every other
-/// group starts collapsed. The currently-active row highlights inside
-/// its group.
-class _GroupedSourceList extends StatelessWidget {
-  const _GroupedSourceList({
+/// Renders sources for one tab.
+///
+/// Two modes:
+/// - **No active search**: pinned sources surface as a flat list at
+///   the top; remaining sources fall through to the existing
+///   repo-grouped view (Built-in expanded by default + the configured
+///   default repo expanded, others collapsed).
+/// - **With a search query**: groups disappear and we render one flat,
+///   alphabetised list of matches across every repo. Pinned status is
+///   still shown via the pin icon so users can spot their favourites.
+class _SourceList extends StatelessWidget {
+  const _SourceList({
     required this.sources,
+    required this.pinnedKeys,
+    required this.query,
     required this.emptyLabel,
     required this.activeKey,
+    required this.onTogglePin,
   });
   final List<_TypedSource> sources;
+  final Set<String> pinnedKeys;
+  final String query;
   final String emptyLabel;
   final String? activeKey;
+  final void Function(_TypedSource) onTogglePin;
+
+  bool _matches(_TypedSource s, String q) {
+    final lq = q.toLowerCase();
+    final name = s.info.name.toLowerCase();
+    final sid = s.sourceId.toLowerCase();
+    final repo = s.repoDisplayName.toLowerCase();
+    return name.contains(lq) || sid.contains(lq) || repo.contains(lq);
+  }
 
   @override
   Widget build(BuildContext context) {
     if (sources.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.all(32),
-        child: Center(
-          child: Text(
-            emptyLabel,
-            style: const TextStyle(
-              color: AppColors.textSecondary,
-              fontSize: 14,
+      return _EmptyState(label: emptyLabel);
+    }
+
+    // Search-active path: flat, alphabetised, pin icon shown inline.
+    if (query.isNotEmpty) {
+      final matches = sources.where((s) => _matches(s, query)).toList()
+        ..sort((a, b) {
+          // Pinned matches float above unpinned within the search
+          // results so the user's favourites remain prominent.
+          final ap = pinnedKeys.contains(a.providerKey) ? 0 : 1;
+          final bp = pinnedKeys.contains(b.providerKey) ? 0 : 1;
+          if (ap != bp) return ap - bp;
+          return (a.info.name.isEmpty ? a.sourceId : a.info.name)
+              .toLowerCase()
+              .compareTo(
+                  (b.info.name.isEmpty ? b.sourceId : b.info.name)
+                      .toLowerCase());
+        });
+      if (matches.isEmpty) {
+        return _EmptyState(label: 'No sources match "$query".');
+      }
+      return ListView.builder(
+        padding: const EdgeInsets.only(top: 4, bottom: 16),
+        itemCount: matches.length,
+        itemBuilder: (_, i) => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.card,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: _SourceRow(
+              source: matches[i],
+              isActive: matches[i].providerKey == activeKey,
+              isPinned: pinnedKeys.contains(matches[i].providerKey),
+              onTogglePin: () => onTogglePin(matches[i]),
             ),
           ),
         ),
       );
     }
+
+    // Default path: pinned bucket up top + grouped repos below.
+    final pinned = sources
+        .where((s) => pinnedKeys.contains(s.providerKey))
+        .toList(growable: false);
+
     // Preserve discovery order so Spyou's default repo (seeded first)
     // floats to the top, with manual / third-party repos following.
     // The two synthetic repos `builtin://` (legacy migration fallback)
@@ -318,31 +443,123 @@ class _GroupedSourceList extends StatelessWidget {
     final entries = groups.entries.toList(growable: false);
     final defaultRepoUrl =
         dotenv.maybeGet('DEFAULT_PROVIDER_REPO')?.trim() ?? '';
-    return ListView.builder(
+
+    final children = <Widget>[];
+    if (pinned.isNotEmpty) {
+      // Sort the pinned bucket by name for stable rendering. The list
+      // itself is small enough that re-sorting on every rebuild is free.
+      final sortedPinned = [...pinned]
+        ..sort((a, b) =>
+            (a.info.name.isEmpty ? a.sourceId : a.info.name)
+                .toLowerCase()
+                .compareTo(
+                    (b.info.name.isEmpty ? b.sourceId : b.info.name)
+                        .toLowerCase()));
+      children.add(_RepoGroup(
+        repoLabel: 'Pinned',
+        leadingIcon: Icons.push_pin_rounded,
+        sources: sortedPinned,
+        activeKey: activeKey,
+        expandedByDefault: true,
+        pinnedKeys: pinnedKeys,
+        onTogglePin: onTogglePin,
+      ));
+    }
+    for (final e in entries) {
+      final repoUrl = e.key;
+      final groupSources = e.value;
+      final repoLabel = repoUrl == kBundledRepoUrl
+          ? 'Built-in'
+          : groupSources.first.repoDisplayName;
+      // Auto-expand the configured default repo, the merged built-in
+      // group, AND any group that contains the currently-active source
+      // so the user lands on it directly.
+      final containsActive = activeKey != null &&
+          groupSources.any((s) => s.providerKey == activeKey);
+      final expanded = repoUrl == defaultRepoUrl ||
+          repoUrl == kBundledRepoUrl ||
+          containsActive;
+      children.add(_RepoGroup(
+        repoLabel: repoLabel,
+        sources: groupSources,
+        activeKey: activeKey,
+        expandedByDefault: expanded,
+        pinnedKeys: pinnedKeys,
+        onTogglePin: onTogglePin,
+      ));
+    }
+    return ListView(
       padding: const EdgeInsets.only(top: 4, bottom: 16),
-      itemCount: entries.length,
-      itemBuilder: (_, i) {
-        final e = entries[i];
-        final repoUrl = e.key;
-        final groupSources = e.value;
-        final repoLabel = repoUrl == kBundledRepoUrl
-            ? 'Built-in'
-            : groupSources.first.repoDisplayName;
-        // Auto-expand the configured default repo, the merged built-in
-        // group, AND any group that contains the currently-active source
-        // so the user lands on it directly.
-        final containsActive = activeKey != null &&
-            groupSources.any((s) => s.providerKey == activeKey);
-        final expanded = repoUrl == defaultRepoUrl ||
-            repoUrl == kBundledRepoUrl ||
-            containsActive;
-        return _RepoGroup(
-          repoLabel: repoLabel,
-          sources: groupSources,
-          activeKey: activeKey,
-          expandedByDefault: expanded,
-        );
-      },
+      children: children,
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState({required this.label});
+  final String label;
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(32),
+      child: Center(
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: 14,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SearchField extends StatelessWidget {
+  const _SearchField({required this.controller, required this.onChanged});
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      onChanged: onChanged,
+      style: const TextStyle(color: AppColors.textPrimary, fontSize: 14),
+      decoration: InputDecoration(
+        prefixIcon: const Icon(
+          Icons.search_rounded,
+          color: AppColors.textSecondary,
+          size: 20,
+        ),
+        suffixIcon: controller.text.isEmpty
+            ? null
+            : IconButton(
+                icon: const Icon(
+                  Icons.close_rounded,
+                  size: 18,
+                  color: AppColors.textSecondary,
+                ),
+                onPressed: () {
+                  controller.clear();
+                  onChanged('');
+                },
+              ),
+        hintText: 'Search sources',
+        hintStyle: const TextStyle(
+          color: AppColors.textSecondary,
+          fontSize: 14,
+        ),
+        filled: true,
+        fillColor: AppColors.card,
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(vertical: 10),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide.none,
+        ),
+      ),
     );
   }
 }
@@ -353,11 +570,19 @@ class _RepoGroup extends StatefulWidget {
     required this.sources,
     required this.activeKey,
     required this.expandedByDefault,
+    required this.pinnedKeys,
+    required this.onTogglePin,
+    this.leadingIcon,
   });
   final String repoLabel;
   final List<_TypedSource> sources;
   final String? activeKey;
   final bool expandedByDefault;
+  final Set<String> pinnedKeys;
+  final void Function(_TypedSource) onTogglePin;
+  /// Optional icon shown left of the group header. The Pinned bucket
+  /// uses a pin glyph; repo groups have no leading icon (just chevron).
+  final IconData? leadingIcon;
 
   @override
   State<_RepoGroup> createState() => _RepoGroupState();
@@ -397,6 +622,14 @@ class _RepoGroupState extends State<_RepoGroup> {
                       ),
                     ),
                     const SizedBox(width: 6),
+                    if (widget.leadingIcon != null) ...[
+                      Icon(
+                        widget.leadingIcon,
+                        color: AppColors.primary,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 6),
+                    ],
                     Expanded(
                       child: Text(
                         widget.repoLabel,
@@ -435,6 +668,9 @@ class _RepoGroupState extends State<_RepoGroup> {
                           (s) => _SourceRow(
                             source: s,
                             isActive: s.providerKey == widget.activeKey,
+                            isPinned:
+                                widget.pinnedKeys.contains(s.providerKey),
+                            onTogglePin: () => widget.onTogglePin(s),
                           ),
                         ),
                       ],
@@ -448,9 +684,16 @@ class _RepoGroupState extends State<_RepoGroup> {
 }
 
 class _SourceRow extends StatelessWidget {
-  const _SourceRow({required this.source, required this.isActive});
+  const _SourceRow({
+    required this.source,
+    required this.isActive,
+    required this.isPinned,
+    required this.onTogglePin,
+  });
   final _TypedSource source;
   final bool isActive;
+  final bool isPinned;
+  final VoidCallback onTogglePin;
 
   @override
   Widget build(BuildContext context) {
@@ -474,6 +717,7 @@ class _SourceRow extends StatelessWidget {
           : Colors.transparent,
       child: InkWell(
         onTap: () => Navigator.pop(context, s.providerKey),
+        onLongPress: onTogglePin,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
           child: Row(
@@ -520,9 +764,31 @@ class _SourceRow extends StatelessWidget {
                   ],
                 ),
               ),
+              // Pin toggle. Always visible — keeps the long-press
+              // gesture discoverable. Outlined when unpinned, solid +
+              // tinted when pinned.
+              IconButton(
+                tooltip: isPinned ? 'Unpin' : 'Pin to top',
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(
+                  minWidth: 36,
+                  minHeight: 36,
+                ),
+                onPressed: onTogglePin,
+                icon: Icon(
+                  isPinned
+                      ? Icons.push_pin_rounded
+                      : Icons.push_pin_outlined,
+                  size: 18,
+                  color: isPinned
+                      ? AppColors.primary
+                      : AppColors.textSecondary,
+                ),
+              ),
               if (isActive)
                 const Padding(
-                  padding: EdgeInsets.only(left: 8),
+                  padding: EdgeInsets.only(left: 4),
                   child: Icon(Icons.check, color: AppColors.primary),
                 ),
             ],

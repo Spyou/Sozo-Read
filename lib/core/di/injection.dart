@@ -51,6 +51,7 @@ import '../services/notification_service.dart';
 import '../state/active_source_cubit.dart';
 import '../state/auth_service.dart';
 import '../state/auto_switch_prefs.dart';
+import '../state/pinned_sources_prefs.dart';
 import '../state/chapter_sort_cubit.dart';
 import '../state/incognito_cubit.dart';
 import '../state/source_filter_cubit.dart';
@@ -135,6 +136,7 @@ Future<void> configureDependencies({AppLockCubit? appLock}) async {
     () => CrossSourceMatcher(repository: sl()),
   );
   sl.registerLazySingleton<AutoSwitchPrefs>(() => AutoSwitchPrefs());
+  sl.registerLazySingleton<PinnedSourcesPrefs>(() => PinnedSourcesPrefs());
   sl.registerLazySingleton<ActiveSourceCubit>(
     () => ActiveSourceCubit(repository: sl()),
   );
