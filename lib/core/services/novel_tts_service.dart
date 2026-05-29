@@ -97,7 +97,11 @@ class NovelTtsService extends BaseAudioHandler {
   Map<String, String>? _pendingVoice;
   Map<String, String> _pronunciations = const <String, String>{};
   bool _skipMarkers = true;
-  int _paragraphPauseMs = 300;
+  // Default 0 — see NovelPrefsCubit.defaultTtsParagraphPauseMs for the
+  // rationale. The cubit pushes the user's stored value into this slot
+  // on app bootstrap (via NovelTtsService.setParagraphPauseMs); the
+  // local default just covers the window before that fires.
+  int _paragraphPauseMs = 0;
   bool _stopAtChapterEnd = false;
   final StreamController<int> _paragraphIndexController =
       StreamController<int>.broadcast();

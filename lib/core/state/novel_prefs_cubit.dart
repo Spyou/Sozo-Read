@@ -95,7 +95,17 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
   static const double defaultTtsVolume = 1.0;
   static const bool defaultTtsStopAtChapterEnd = false;
   static const bool defaultTtsSkipMarkers = true;
-  static const int defaultTtsParagraphPauseMs = 300;
+  // The neural engine has its own ~200-500ms per-utterance synthesis
+  // latency. Adding an explicit pause on top produced a 500ms-1s gap
+  // between paragraphs -- enough that users described reading as
+  // "so many pauses". 0 leans on the engine's natural sentence-end
+  // silence; users who want a breath can crank it in Reading
+  // settings.
+  static const int defaultTtsParagraphPauseMs = 0;
+  // Legacy default, used by the one-time migration in _restore so
+  // existing users who never touched the setting get the new
+  // behaviour automatically. Customized values are left alone.
+  static const int _legacyDefaultTtsParagraphPauseMs = 300;
   /// Default TTS engine. Stays `system` so existing users see no
   /// behaviour change — the neural engine is strictly opt-in via the
   /// settings UI + voice download.
@@ -229,9 +239,18 @@ class NovelPrefsCubit extends Cubit<NovelPrefs> {
       ttsSkipMarkers:
           (_box.get(_kTtsSkipMarkers) as bool?) ?? defaultTtsSkipMarkers,
       ttsParagraphPauseMs:
-          ((_box.get(_kTtsParagraphPauseMs) as num?)?.toInt() ??
-                  defaultTtsParagraphPauseMs)
-              .clamp(0, 2000),
+          // Migration: if the stored value is exactly the OLD
+          // default (300ms), assume the user never touched it and
+          // upgrade them to the new default (0ms). Anything else
+          // (0, 150, 500, etc.) is a deliberate choice and stays
+          // untouched.
+          (((_box.get(_kTtsParagraphPauseMs) as num?)?.toInt() ??
+                      defaultTtsParagraphPauseMs) ==
+                  _legacyDefaultTtsParagraphPauseMs
+              ? defaultTtsParagraphPauseMs
+              : ((_box.get(_kTtsParagraphPauseMs) as num?)?.toInt() ??
+                      defaultTtsParagraphPauseMs)
+                  .clamp(0, 2000)),
       ttsPronunciations: _readTtsPronunciations(),
       perBookTtsVoice: _readPerBookTtsVoice(),
       perBookTtsRate: _readPerBookTtsRate(),
