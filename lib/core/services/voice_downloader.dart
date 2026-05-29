@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
+import 'package:archive/archive_io.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -167,30 +168,63 @@ class VoiceDownloader {
 
   /// Decodes `.tar.bz2`, writes every regular file under [installDir],
   /// then locates the three sherpa-onnx inputs by recursive walk.
+  ///
+  /// Memory note: the earlier version loaded the entire bz2 into RAM,
+  /// then the entire uncompressed tar, then iterated. For a "high
+  /// quality" Piper voice that meant ~60 MB compressed + ~120 MB
+  /// uncompressed held simultaneously plus per-entry allocations,
+  /// which OOM-killed the process on mid-range phones during the
+  /// extracting phase. The streamed path keeps memory pressure to
+  /// roughly one chunk + the current entry's bytes (~3-5 MB peak).
   Future<SherpaVoicePaths?> _extract({
     required String tarPath,
     required Directory installDir,
   }) async {
-    final bz2Bytes = await File(tarPath).readAsBytes();
-    // bz2 decode runs in-memory — sherpa-onnx voices peak around
-    // ~60 MB compressed / ~120 MB uncompressed (high-quality), which
-    // is acceptable for a one-shot extract on a mid-range phone but
-    // would be worth streaming if voices ever cross ~500 MB.
-    final tarBytes = BZip2Decoder().decodeBytes(bz2Bytes);
-    final archive = TarDecoder().decodeBytes(tarBytes);
+    // Stage 1: stream the bz2 decode into a sibling .tar file. We do
+    // this on disk rather than piping directly into the tar decoder
+    // because the `archive` package's tar reader needs random access
+    // (entry headers point at offsets), and the bz2 decoder is one
+    // forward stream. Two passes, no big buffers.
+    final intermediateTarPath = '$tarPath.tar';
+    {
+      final inStream = InputFileStream(tarPath);
+      final outStream = OutputFileStream(intermediateTarPath);
+      try {
+        BZip2Decoder().decodeStream(inStream, outStream);
+      } finally {
+        await outStream.close();
+        await inStream.close();
+      }
+    }
 
-    for (final entry in archive) {
-      if (!entry.isFile) continue;
-      // Strip the archive's top-level folder so we land everything
-      // directly under installDir/. The release tarballs ship a
-      // single `vits-piper-<id>/` root; flattening it keeps the
-      // path layout predictable regardless of the upstream naming.
-      final relative = _flattenPath(entry.name);
-      if (relative.isEmpty) continue;
-      final outPath = '${installDir.path}/$relative';
-      final outFile = File(outPath);
-      await outFile.parent.create(recursive: true);
-      await outFile.writeAsBytes(entry.content as List<int>, flush: false);
+    // Stage 2: stream tar extraction. `decodeBuffer` walks entries
+    // lazily — each entry's bytes are read off disk only when we
+    // touch `.content`, so memory stays at one-entry-at-a-time.
+    final tarStream = InputFileStream(intermediateTarPath);
+    try {
+      final archive = TarDecoder().decodeStream(tarStream);
+      for (final entry in archive) {
+        if (!entry.isFile) continue;
+        // Strip the archive's top-level folder so we land everything
+        // directly under installDir/. The release tarballs ship a
+        // single `vits-piper-<id>/` root; flattening it keeps the
+        // path layout predictable regardless of the upstream naming.
+        final relative = _flattenPath(entry.name);
+        if (relative.isEmpty) continue;
+        final outPath = '${installDir.path}/$relative';
+        final outFile = File(outPath);
+        await outFile.parent.create(recursive: true);
+        await outFile.writeAsBytes(entry.content, flush: false);
+      }
+    } finally {
+      await tarStream.close();
+      // The intermediate .tar is just decode scratch — drop it as
+      // soon as extraction finishes. Best-effort; if it lingers, the
+      // OS temp dir gets cleaned eventually.
+      try {
+        final f = File(intermediateTarPath);
+        if (f.existsSync()) await f.delete();
+      } catch (_) {}
     }
 
     // Recursive walk to find the three required inputs. We don't
